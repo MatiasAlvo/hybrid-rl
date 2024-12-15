@@ -15,6 +15,7 @@ else:
     print(f'Number of parameters provided including script name: {len(sys.argv)}')
     print(f'Number of parameters should be either 4 or 2 (so that last 2 parameters defined in main_run.py)')
     assert False
+    
 
 train_or_test = sys.argv[1]
 
