@@ -1,0 +1,10 @@
+# Extends base config
+nn_params:
+  policy_network:
+    name: 'hdpo_policy'
+    hidden_layers: [32, 32]
+    heads:
+      continuous:
+        enabled: true    # HDPO uses continuous actions
+      discrete:
+        enabled: true    # Enable for future Gumbel-Softmax 

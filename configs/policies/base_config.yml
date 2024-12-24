@@ -1,0 +1,39 @@
+# Base configuration that others will extend
+trainer_params:
+  epochs: 100
+  do_dev_every_n_epochs: 5
+  print_results_every_n_epochs: 5
+  save_model: true
+  epochs_between_save: 5
+  choose_best_model_on: 'dev_loss'
+  load_previous_model: false
+
+optimizer_params:
+  learning_rate: 0.001
+  weight_decay: 0.0
+  gradient_clip: null
+
+nn_params:
+  policy_network:
+    name: 'base_policy'  # Will be overridden
+    input_size: null     # Set by environment
+    hidden_layers: [64, 64]
+    activation: 'elu'
+    dropout: 0.1
+    batch_norm: true
+    heads:
+      discrete:
+        enabled: false    # Enable/disable heads as needed
+        size: null       # Set by feature registry
+        activation: 'linear'  # Raw logits, agent applies softmax
+      continuous:
+        enabled: false
+        size: null
+        activation: 'linear'  # Raw outputs, agent scales
+    
+  value_network:
+    enabled: false      # Enable for actor-critic
+    hidden_layers: [64, 64]
+    activation: 'elu'
+    dropout: 0.1
+    batch_norm: true 

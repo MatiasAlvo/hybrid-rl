@@ -1,0 +1,46 @@
+trainer_params:
+  'epochs': 100
+  'do_dev_every_n_epochs': 1
+  'print_results_every_n_epochs': 1
+  'save_model': false
+  'epochs_between_save': 1
+  'choose_best_model_on': 'dev_loss'
+  'load_previous_model': false
+  'load_model_path': 'models/saved_models/your_model.pt'
+  'save_model_folders': ['hybrid_general']
+  'save_model_filename': 'model'
+
+optimizer_params:
+  'learning_rate': 0.0001
+  'weight_decay': 0.0
+  'gradient_clip': null
+
+nn_params:
+  policy_network:
+    name: 'hybrid_policy'
+    input_size: 2
+    hidden_layers: [64, 64]
+    activation: 'ELU'
+    dropout: 0.0
+    batch_norm: false
+    heads:
+      discrete:
+        enabled: true
+        size: 4
+        activation: 'linear'
+      continuous:
+        enabled: true
+        size: 4
+        activation: 'linear'
+
+  value_network:
+    enabled: true
+    hidden_layers: [64, 64]
+    activation: 'elu'
+    dropout: 0.1
+    batch_norm: false
+    observation_keys: [
+      'store_inventories'
+      # 'past_demands',
+      # 'current_period'
+    ]

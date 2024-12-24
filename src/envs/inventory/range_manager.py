@@ -1,0 +1,330 @@
+from dataclasses import dataclass
+from typing import List, Dict, Tuple
+import torch
+import numpy as np
+import torch.nn.functional as F
+
+@dataclass
+class FeatureRange:
+    name: str
+    ranges: List[List[float]]
+    values: List[float]
+    
+class RangeManager:
+    """
+    Manages ranges for hybrid actions by partitioning the action space
+    based on all threshold points from all features
+    """
+    def __init__(self, config: Dict, device: torch.device):
+        self.device = device
+        self.discrete_features = config.get('discrete_features', {})
+        self.validate_features()
+        self.breakpoints = self._compute_breakpoints()
+        self.ranges = self._compute_ranges()
+        self.n_sub_ranges = len(self.ranges)
+        
+        # Pre-compute mappings from sub-ranges to feature ranges
+        self.feature_range_mappings = self._precompute_feature_range_mappings()
+        
+        # Valid combinations are all sub-ranges when using range-based approach
+        self.valid_combinations = list(range(self.n_sub_ranges)) if self.ranges else None
+    
+    def validate_features(self):
+        """Validate feature definitions"""
+        if not self.discrete_features:
+            return
+            
+        features = [f for f in self.discrete_features.values() if f is not None]
+        if not features:
+            return
+            
+        # All features should start at min and end at max
+        global_min = min(f['thresholds'][0] for f in features)
+        global_max = max(f['thresholds'][-1] for f in features)
+        
+        for feature in features:
+            thresholds = feature['thresholds']
+            values = feature['values']
+            
+            assert len(values) == len(thresholds) - 1, \
+                f"Number of values ({len(values)}) should be one less than thresholds ({len(thresholds)})"
+            assert thresholds[0] == global_min, f"All features should start at {global_min}"
+            assert thresholds[-1] == global_max, f"All features should end at {global_max}"
+    
+    def _compute_breakpoints(self) -> np.ndarray:
+        """Compute unique breakpoints from all features"""
+        if not self.discrete_features:
+            return np.array([])
+            
+        # Collect all threshold points
+        all_thresholds = []
+        for feature in self.discrete_features.values():
+            if feature is not None:
+                all_thresholds.extend(feature['thresholds'])
+                
+        # Get unique breakpoints and sort them
+        return np.sort(np.unique(all_thresholds))
+    
+    def _compute_ranges(self) -> List[List[float]]:
+        """Compute ranges based on breakpoints"""
+        if len(self.breakpoints) < 2:
+            return []
+            
+        return [[self.breakpoints[i], self.breakpoints[i+1]] 
+                for i in range(len(self.breakpoints)-1)]
+    
+    def _precompute_feature_range_mappings(self) -> Dict:
+        """
+        Pre-compute which sub-ranges correspond to each feature range.
+        Returns a dictionary of feature mappings, where each mapping contains:
+        - range_indices: which sub-ranges belong to each feature range
+        - values: corresponding feature values for each range
+        """
+        mappings = {}
+        
+        for feature_name, feature in self.discrete_features.items():
+            if feature is None:
+                continue
+                
+            original_ranges = list(zip(feature['thresholds'][:-1], feature['thresholds'][1:]))
+            n_original_ranges = len(original_ranges)
+            
+            # For each original range, find which sub-ranges belong to it
+            range_indices = [[] for _ in range(n_original_ranges)]
+            
+            for i, (orig_start, orig_end) in enumerate(original_ranges):
+                for j, (sub_start, sub_end) in enumerate(self.ranges):
+                    if sub_start >= orig_start and sub_end <= orig_end:
+                        range_indices[i].append(j)
+            
+            mappings[feature_name] = {
+                'range_indices': range_indices,
+                'values': torch.tensor(feature['values'], device=self.device)
+            }
+            
+        return mappings
+    
+    def get_network_dimensions(self) -> Dict:
+        """Get dimensions needed for network outputs"""
+        if not self.discrete_features:
+            return {'n_discrete': 0, 'n_continuous': 1}
+            
+        return {
+            'n_discrete': self.n_sub_ranges,    # One discrete output per sub-range
+            'n_continuous': self.n_sub_ranges   # One continuous output per sub-range
+        }
+    
+    def convert_network_output_to_simulator_action(
+        self, 
+        logits: torch.Tensor,    # Shape: (batch_size, n_stores, n_sub_ranges) (unnormalized real values)
+        continuous_values: torch.Tensor,  # Shape: (batch_size, n_stores, n_sub_ranges) (unnormalized real values)
+        use_argmax: bool = False
+    ) -> Dict:
+        """
+        Convert network outputs to various action representations needed for
+        simulation and optimization.
+        """
+        batch_size, n_stores, _ = logits.shape
+        
+        # 1. Scale continuous values to each range
+        continuous_values = torch.sigmoid(continuous_values)  # Scale to [0,1]
+        continuous_per_sub_range = torch.zeros_like(continuous_values)
+        for i, (range_min, range_max) in enumerate(self.ranges):
+            continuous_per_sub_range[..., i] = range_min + continuous_values[..., i] * (range_max - range_min)
+        
+        # 2. Process discrete probabilities
+        discrete_probs = F.softmax(logits, dim=-1)
+        if use_argmax:
+            discrete_one_hot = torch.zeros_like(discrete_probs)
+            max_indices = discrete_probs.argmax(dim=-1)  # Shape: (batch_size, n_stores)
+            # Create indices for scatter
+            batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, n_stores)
+            store_indices = torch.arange(n_stores).view(1, -1).expand(batch_size, -1)
+            discrete_one_hot[batch_indices, store_indices, max_indices] = 1.0
+            discrete_probs = discrete_one_hot
+        
+        # 3. Map to original feature ranges using pre-computed mappings
+        feature_mappings = {}
+        for feature_name, mapping in self.feature_range_mappings.items():
+            feature_discrete = torch.zeros(
+                (batch_size, n_stores, len(mapping['values'])), 
+                device=discrete_probs.device
+            )
+            feature_continuous = torch.zeros(
+                (batch_size, n_stores, len(mapping['values'])), 
+                device=continuous_per_sub_range.device
+            )
+            
+            # For each original range of this feature
+            for i, sub_range_indices in enumerate(mapping['range_indices']):
+                # Sum probabilities and weighted continuous values for all sub-ranges in this range
+                for j in sub_range_indices:
+                    feature_discrete[..., i] += discrete_probs[..., j]
+                    feature_continuous[..., i] += discrete_probs[..., j] * continuous_per_sub_range[..., j]
+            
+            feature_mappings[feature_name] = {
+                'discrete': feature_discrete,      # Shape: (batch_size, n_stores, n_feature_ranges)
+                'continuous': feature_continuous,  # Shape: (batch_size, n_stores, n_feature_ranges)
+                'value':
+                 mapping['values']
+            }
+        
+        # 4. Calculate the total action by summing over feature_continuous for any feature
+        total_action = torch.sum(feature_continuous, dim=-1)
+        
+        return {
+            'continuous_per_sub_range': continuous_per_sub_range,  # Shape: (batch_size, n_stores, n_sub_ranges)
+            'discrete_probs': discrete_probs,             # Shape: (batch_size, n_stores, n_sub_ranges)
+            'feature_mappings': feature_mappings,          # Per-feature mappings with store dimension
+            'total_action': total_action
+        }
+    
+    def get_action_ranges(self):
+        """Returns the ranges for each action type"""
+        if not self.discrete_features:
+            return {
+                'discrete': None,
+                'continuous': None
+            }
+            
+        return {
+            'discrete': self.ranges,  # Using self.ranges from _compute_ranges()
+            'continuous': self.ranges  # Same ranges for both types
+        }
+    
+    def get_discrete_probabilities(self, logits, argmax=False, sample=False):
+        """Convert logits to probabilities or one-hot vectors"""
+        if logits is None:
+            return None
+        
+        # Debug logits before softmax
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            print("Warning: NaN or Inf in logits before softmax")
+            print("Logits stats:", 
+                  f"range [{logits.min().item():.3f}, {logits.max().item():.3f}], "
+                  f"mean {logits.mean().item():.3f}")
+        
+        probs = F.softmax(logits, dim=-1)
+        
+        # Debug probabilities
+        if (probs < 0).any() or (probs > 1).any():
+            print("Warning: Invalid probability values")
+            print("Probs stats:", 
+                  f"range [{probs.min().item():.3f}, {probs.max().item():.3f}], "
+                  f"mean {probs.mean().item():.3f}")
+        
+        if argmax:
+            indices = probs.argmax(dim=-1)
+            probs = F.one_hot(indices, num_classes=logits.size(-1)).float()
+        elif sample:
+            try:
+                indices = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1)  # Sample from last dim
+                probs = torch.zeros_like(probs)
+                probs.scatter_(-1, indices.view(probs.shape[:-1] + (1,)), 1)  # Place 1s in last dim
+            except RuntimeError as e:
+                print("Error in multinomial sampling:")
+                print("Probs shape:", probs.shape)
+                print("Probs sum:", probs.sum(-1))
+                print("Any NaN:", torch.isnan(probs).any())
+                print("Any Inf:", torch.isinf(probs).any())
+                print("Any negative:", (probs < 0).any())
+                raise e
+        
+        return probs
+    
+    def get_continuous_values(self, raw_values):
+        """Scale continuous values to [0,1] range"""
+        if raw_values is None:
+            return None
+            
+        return torch.sigmoid(raw_values)
+    
+    def scale_continuous_by_ranges(self, continuous_values, ranges):
+        """
+        Scale [0,1] values to actual ranges while maintaining input shape
+        Args:
+            continuous_values: tensor of shape [batch_size, n_stores, n_ranges]
+            ranges: list of [min, max] pairs for each range
+        Returns:
+            scaled values with same shape as input
+        """
+        if continuous_values is None or ranges is None:
+            return None
+        
+        scaled_values = torch.zeros_like(continuous_values)
+        
+        # Scale each range independently
+        for i, (min_val, max_val) in enumerate(ranges):
+            range_size = max_val - min_val
+            scaled_values[..., i] = min_val + continuous_values[..., i] * range_size
+        
+        return scaled_values
+    
+    def compute_feature_actions(self, discrete_probs, continuous_values):
+        """
+        For each feature and each of its ranges:
+        - Get the pre-computed mapping of which sub-ranges correspond to this range
+        - Sum (discrete_probs * continuous_values) over those sub-ranges
+        """
+        if discrete_probs is None and continuous_values is None:
+            return None
+            
+        feature_actions = {}
+        batch_size, n_stores, _ = discrete_probs.shape
+        
+        # Iterate over features
+        for feature_name, mapping in self.feature_range_mappings.items():
+            n_feature_ranges = len(mapping['values'])
+            feature_action = torch.zeros(batch_size, n_stores, n_feature_ranges, device=discrete_probs.device)
+            feature_discrete = torch.zeros(batch_size, n_stores, n_feature_ranges, device=discrete_probs.device)
+            
+            # For each range of this feature
+            for range_idx, sub_range_indices in enumerate(mapping['range_indices']):
+                # Sum over the sub-ranges that correspond to this range
+                # (this correspondence was pre-computed in _precompute_feature_range_mappings)
+                sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
+                feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
+                feature_discrete[..., range_idx] = torch.sum(discrete_probs[..., sub_range_indices], dim=-1, keepdim=False)
+            feature_actions[feature_name] = {
+                'action': feature_action,  # Shape: [batch_size, n_stores, n_feature_ranges] (represents the action for each range)
+                'range_probs': feature_discrete,  # Shape: [batch_size, n_stores, n_feature_ranges] (represents the discrete probabilities for each range)
+                'values': mapping['values']
+            }
+        
+        feature_actions['total_action'] = self.compute_total_action(discrete_probs, continuous_values)
+        
+        return feature_actions
+
+    def compute_total_action(self, discrete_probs, continuous_values):
+        """
+        Compute the total action as the sum of discrete probabilities multiplied by continuous values.
+        
+        Args:
+            discrete_probs: tensor of shape [batch_size, n_stores, n_discrete]
+            continuous_values: tensor of shape [batch_size, n_stores, n_continuous]
+        
+        Returns:
+            total_action: tensor of shape [batch_size, n_stores, n_total_actions]
+        """
+        if discrete_probs is None or continuous_values is None:
+            return None
+        
+        # Element-wise multiplication and summation across the last dimension
+        total_action = discrete_probs * continuous_values
+        
+        # Sum across the continuous dimension to get total action
+        total_action = total_action.sum(dim=-1)  # Shape: [batch_size, n_stores]
+        
+        return total_action
+    
+    def get_continuous_ranges(self):
+        """Returns the ranges for continuous actions"""
+        if not self.discrete_features:
+            return None
+        return self.ranges  # Using self.ranges from _compute_ranges()
+    
+    def get_discrete_ranges(self):
+        """Returns the ranges for discrete actions"""
+        if not self.discrete_features:
+            return None
+        return self.ranges  # Same ranges for both types
