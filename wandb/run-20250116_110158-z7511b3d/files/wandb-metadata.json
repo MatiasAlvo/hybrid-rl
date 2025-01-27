@@ -1,0 +1,89 @@
+{
+  "os": "Linux-4.19.0-25-amd64-x86_64-with-glibc2.28",
+  "python": "CPython 3.10.16",
+  "startedAt": "2025-01-16T16:01:59.032331Z",
+  "args": [
+    "train",
+    "hybrid_general",
+    "hybrid_general_policy"
+  ],
+  "program": "/user/ma4177/Exp_neural/main_run.py",
+  "codePath": "main_run.py",
+  "git": {
+    "remote": "https://github.com/MatiasAlvo/Exp_neural.git",
+    "commit": "2ea16d9f8671aacc3a176c30fde36ebc03a71d48"
+  },
+  "email": "alvomatias@gmail.com",
+  "root": "/user/ma4177/Exp_neural",
+  "host": "researchgpu04",
+  "executable": "/user/ma4177/.conda/envs/exp_neural/bin/python",
+  "codePathLocal": "main_run.py",
+  "cpu_count": 64,
+  "cpu_count_logical": 128,
+  "gpu": "NVIDIA A40",
+  "gpu_count": 8,
+  "disk": {
+    "/": {
+      "total": "541067403264",
+      "used": "169656320"
+    }
+  },
+  "memory": {
+    "total": "1082134802432"
+  },
+  "cpu": {
+    "count": 64,
+    "countLogical": 128
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 10752,
+      "architecture": "Ampere"
+    }
+  ],
+  "cudaVersion": "12.2"
+}

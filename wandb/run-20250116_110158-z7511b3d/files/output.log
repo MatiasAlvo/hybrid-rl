@@ -1,0 +1,45 @@
+Initializing W&B with project: inventory_control, entity: alvomatias
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+[34m[1mwandb[0m: [33mWARNING[0m Step cannot be set when using tensorboard syncing. Please use `run.define_metric(...)` to define a custom metric to log your step values.
+/user/ma4177/Exp_neural/src/utils/logger.py:193: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"weights_stats/{name}_std", param.data.std(), step)
+/user/ma4177/Exp_neural/src/utils/logger.py:204: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"grads_stats/{name}_std", param.grad.std(), step)
+Epoch 0: Train Loss = 14.2735, Dev Loss = 14.1697
+Epoch 1: Train Loss = 14.1154, Dev Loss = 13.9869
+Epoch 2: Train Loss = 14.0046, Dev Loss = 13.8677
+Epoch 3: Train Loss = 13.8742, Dev Loss = 13.7153
+Epoch 4: Train Loss = 13.6912, Dev Loss = 13.5800
+Epoch 5: Train Loss = 13.4891, Dev Loss = 13.4001
+Epoch 6: Train Loss = 13.3782, Dev Loss = 13.2835
+Epoch 7: Train Loss = 13.2221, Dev Loss = 13.0728
+Epoch 8: Train Loss = 13.0453, Dev Loss = 12.9080
+Epoch 9: Train Loss = 12.7961, Dev Loss = 12.7205
+Epoch 10: Train Loss = 12.5863, Dev Loss = 12.4740
+Epoch 11: Train Loss = 12.3954, Dev Loss = 12.2715
+Epoch 12: Train Loss = 12.2222, Dev Loss = 12.0901
+Epoch 13: Train Loss = 11.9492, Dev Loss = 11.9138
+Epoch 14: Train Loss = 11.8695, Dev Loss = 11.6744
+Epoch 15: Train Loss = 11.6200, Dev Loss = 11.5374
+Traceback (most recent call last):
+  File "/user/ma4177/Exp_neural/main_run.py", line 238, in <module>
+    trainer.train(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 64, in train
+    train_metrics = self.do_one_epoch(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 172, in do_one_epoch
+    batch_metrics = optimizer_wrapper.optimize(trajectory_data)
+  File "/user/ma4177/Exp_neural/src/algorithms/hybrid/optimizer_wrappers/hybrid_wrapper.py", line 170, in optimize
+    self.optimizer.step()
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/optim/optimizer.py", line 487, in wrapper
+    out = func(*args, **kwargs)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/optim/optimizer.py", line 91, in _use_grad
+    ret = func(self, *args, **kwargs)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/optim/adam.py", line 197, in step
+    self._cuda_graph_capture_health_check()
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/optim/optimizer.py", line 428, in _cuda_graph_capture_health_check
+    and torch.cuda.is_available()
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/cuda/__init__.py", line 118, in is_available
+    if not _is_compiled():
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/cuda/__init__.py", line 109, in _is_compiled
+    return hasattr(torch._C, "_cuda_getDeviceCount")
+KeyboardInterrupt

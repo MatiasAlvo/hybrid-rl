@@ -1,0 +1,61 @@
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+Logging metric: train/loss/total with value: 14.09276611328125 at epoch: 0
+Logging metric: train/loss/reported with value: 12.914507697610293 at epoch: 0
+Logging metric: train/loss/value with value: 7.316419616341591 at epoch: 0
+Logging metric: train/loss/policy with value: -0.4693203889764846 at epoch: 0
+Logging metric: train/loss/entropy with value: 2.3016212187707423 at epoch: 0
+Logging metric: train/policy/approx_kl with value: 7.770561397057279e-05 at epoch: 0
+Logging metric: train/policy/clipfrac with value: 0.0 at epoch: 0
+Logging metric: train/policy/explained_var with value: -0.007592320442199707 at epoch: 0
+Logging metric: train/policy/state_value_correlation with value: -0.5990623608231544 at epoch: 0
+Logging metric: train/policy/value_return_correlation with value: -0.1761572565883398 at epoch: 0
+Logging metric: train/optimization/total_epochs with value: 10.0 at epoch: 0
+Logging metric: dev/loss/total with value: 13.86919189453125 at epoch: 0
+Logging metric: dev/loss/reported with value: 12.63055419921875 at epoch: 0
+/user/ma4177/Exp_neural/src/utils/logger.py:185: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"weights_stats/{name}_std", param.data.std(), step)
+/user/ma4177/Exp_neural/src/utils/logger.py:196: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"grads_stats/{name}_std", param.grad.std(), step)
+Epoch 0: Train Loss = 14.0928, Dev Loss = 13.8692
+Logging metric: train/loss/total with value: 13.8549609375 at epoch: 1
+Logging metric: train/loss/reported with value: 12.679192038143382 at epoch: 1
+Logging metric: train/loss/value with value: 6.82161984294653 at epoch: 1
+Logging metric: train/loss/policy with value: -0.17354061990045008 at epoch: 1
+Logging metric: train/loss/entropy with value: 2.2993953794240953 at epoch: 1
+Logging metric: train/policy/approx_kl with value: 0.000132799340006761 at epoch: 1
+Logging metric: train/policy/clipfrac with value: 0.0 at epoch: 1
+Logging metric: train/policy/explained_var with value: -0.010963082313537598 at epoch: 1
+Logging metric: train/policy/state_value_correlation with value: -0.8316504135727882 at epoch: 1
+Logging metric: train/policy/value_return_correlation with value: -0.18596406653523445 at epoch: 1
+Logging metric: train/optimization/total_epochs with value: 10.0 at epoch: 1
+Logging metric: dev/loss/total with value: 13.722041015625 at epoch: 1
+Logging metric: dev/loss/reported with value: 12.498291015625 at epoch: 1
+Epoch 1: Train Loss = 13.8550, Dev Loss = 13.7220
+Logging metric: train/loss/total with value: 13.66259521484375 at epoch: 2
+Logging metric: train/loss/reported with value: 12.453074735753676 at epoch: 2
+Logging metric: train/loss/value with value: 6.881063455343247 at epoch: 2
+Logging metric: train/loss/policy with value: -0.1607907183235511 at epoch: 2
+Logging metric: train/loss/entropy with value: 2.295872095227242 at epoch: 2
+Logging metric: train/policy/approx_kl with value: 0.00015676305854005795 at epoch: 2
+Logging metric: train/policy/clipfrac with value: 0.0 at epoch: 2
+Logging metric: train/policy/explained_var with value: -0.008730590343475342 at epoch: 2
+Logging metric: train/policy/state_value_correlation with value: -0.7919595092535019 at epoch: 2
+Logging metric: train/policy/value_return_correlation with value: -0.1241484098136425 at epoch: 2
+Logging metric: train/optimization/total_epochs with value: 10.0 at epoch: 2
+Logging metric: dev/loss/total with value: 13.592412109375 at epoch: 2
+Logging metric: dev/loss/reported with value: 12.411229750689339 at epoch: 2
+Epoch 2: Train Loss = 13.6626, Dev Loss = 13.5924
+Traceback (most recent call last):
+  File "/user/ma4177/Exp_neural/main_run.py", line 241, in <module>
+    trainer.train(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 50, in train
+    train_metrics = self.do_one_epoch(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 146, in do_one_epoch
+    total_reward, reward_to_report, trajectory_data = self.simulate_batch(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 237, in simulate_batch
+    next_observation, reward, terminated, _, _ = simulator.step(observation, action_dict)
+  File "/user/ma4177/Exp_neural/src/envs/inventory/hybrid_simulator.py", line 30, in step
+    next_state, base_costs = self._calculate_base_transitions_and_costs(observation, action_dict)
+  File "/user/ma4177/Exp_neural/src/envs/inventory/hybrid_simulator.py", line 86, in _calculate_base_transitions_and_costs
+    base_costs = base_costs.sum(dim=1)
+KeyboardInterrupt

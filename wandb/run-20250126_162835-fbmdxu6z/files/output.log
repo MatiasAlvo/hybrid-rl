@@ -1,0 +1,30 @@
+Initializing W&B with project: inventory_control, entity: alvomatias
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+[34m[1mwandb[0m: [33mWARNING[0m Step cannot be set when using tensorboard syncing. Please use `run.define_metric(...)` to define a custom metric to log your step values.
+/user/ma4177/Exp_neural/src/utils/logger.py:193: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"weights_stats/{name}_std", param.data.std(), step)
+/user/ma4177/Exp_neural/src/utils/logger.py:204: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"grads_stats/{name}_std", param.grad.std(), step)
+Epoch 0: Train Loss = 14.1542, Dev Loss = 14.0398
+Traceback (most recent call last):
+  File "/user/ma4177/Exp_neural/main_run.py", line 240, in <module>
+    trainer.train(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 98, in train
+    logger.log_model_weights(model, global_step)
+  File "/user/ma4177/Exp_neural/src/utils/logger.py", line 192, in log_model_weights
+    self.writer.add_scalar(f"weights_stats/{name}_mean", param.data.mean(), step)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/utils/tensorboard/writer.py", line 381, in add_scalar
+    self._get_file_writer().add_summary(summary, global_step, walltime)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/utils/tensorboard/writer.py", line 115, in add_summary
+    self.add_event(event, global_step, walltime)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/utils/tensorboard/writer.py", line 99, in add_event
+    self.event_writer.add_event(event)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/tensorboard/summary/writer/event_file_writer.py", line 117, in add_event
+    self._async_writer.write(event.SerializeToString())
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/tensorboard/summary/writer/event_file_writer.py", line 174, in write
+    self._byte_queue.put(bytestring)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/queue.py", line 140, in put
+    self.not_full.wait()
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/threading.py", line 320, in wait
+    waiter.acquire()
+KeyboardInterrupt

@@ -41,9 +41,11 @@ class HybridAgent(BaseAgent):
                       f"range [{discrete_logits.min().item():.3f}, {discrete_logits.max().item():.3f}], "
                       f"mean {discrete_logits.mean().item():.3f}")
         
+        # print(f'raw_outputs: {raw_outputs["discrete"][0]}')
         # Process network output
         action_dict = self.feature_registry.process_network_output(raw_outputs, argmax=False, sample=True)
-        
+        # print(f'discrete_probs: {action_dict["discrete_probs"][0]}')
+        # print(f'average discrete_probs: {action_dict["discrete_probs"].mean(dim=0)}')
         # Get value if value network exists
         value = self.value_net(observation) if self.value_net is not None else None
         
@@ -57,14 +59,21 @@ class HybridAgent(BaseAgent):
         distribution = torch.distributions.Categorical(logits=logits)
         return distribution.entropy()
     
-    def get_logits_value_and_entropy(self, processed_observation):
-        """Get logits, value, and entropy
-        Note that processed_observation is already processed by the feature registry, so we flag it as False
-        """
+    def get_logits_value_and_entropy(self, processed_observation, actions):
+        """Get logits for specific actions, value, and entropy"""
+        raw_outputs = self.policy(processed_observation, process_state=False)
         
-        logits = self.policy(processed_observation, process_state=False)['discrete']
+        # raw_outputs['discrete'] shape is [batch_size, n_stores, n_actions]
+        # actions shape is [batch_size]
+        # Need to reshape actions to match the logits dimension
+        actions = actions.view(-1, 1, 1).expand(-1, raw_outputs['discrete'].size(1), 1)
+        
+        # Gather logits for the specific actions that were taken
+        logits = raw_outputs['discrete'].gather(-1, actions).squeeze(-1)
+        
         value = self.value_net(processed_observation, process_state=False) if self.value_net else None
-        entropy = self.get_entropy(logits)
+        entropy = self.get_entropy(raw_outputs['discrete'])
+        
         return logits, value, entropy
     
     # def transform_outputs(self, raw_outputs):

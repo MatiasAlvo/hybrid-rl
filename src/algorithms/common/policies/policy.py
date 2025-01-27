@@ -613,22 +613,52 @@ class PolicyNetwork(nn.Module):
         # Build backbone
         self.backbone = self._build_backbone()
         self.to(device)
+
+    def lazy_layer_init(self, layer, std=2**0.5, bias_const=0.0):
+        def init_hook(module, input):
+            if not hasattr(module, 'initialized'):
+                torch.nn.init.orthogonal_(module.weight, std)
+                torch.nn.init.constant_(module.bias, bias_const)
+                module.initialized = True
+        
+        layer.register_forward_pre_hook(init_hook)
+        return layer
+    
+    def layer_init(self, layer, std=2**0.5, bias_const=0.0):
+        torch.nn.init.orthogonal_(layer.weight, std)
+        torch.nn.init.constant_(layer.bias, bias_const)
+        return layer
     
     def _build_backbone(self):
         """Build the shared backbone network"""
         layers = []
         prev_size = self.input_size
         
-        for size in self.hidden_layers:
+        # First layer uses LazyLinear with lazy initialization
+        first_layer = self.lazy_layer_init(
+            nn.LazyLinear(self.hidden_layers[0]),
+            std=2**0.5
+        )
+        layers.append(first_layer)
+        layers.extend([
+            getattr(nn, self.activation)(),
+            nn.Dropout(self.dropout_rate)
+        ])
+        
+        # Build rest of layers
+        for i in range(1, len(self.hidden_layers)):
             if self.use_batch_norm:
-                layers.append(nn.BatchNorm1d(prev_size))
+                layers.append(nn.BatchNorm1d(self.hidden_layers[i-1]))
             
+            linear_layer = self.layer_init(
+                nn.Linear(self.hidden_layers[i-1], self.hidden_layers[i]),
+                std=2**0.5
+            )
             layers.extend([
-                nn.Linear(prev_size, size),
-                getattr(nn, self.activation)(),  # Now using capitalized name
+                linear_layer,
+                getattr(nn, self.activation)(),
                 nn.Dropout(self.dropout_rate)
             ])
-            prev_size = size
             
         return nn.Sequential(*layers)
     
@@ -647,21 +677,22 @@ class HybridPolicy(PolicyNetwork):
         self.heads = config['policy_network']['heads']
         last_hidden = self.hidden_layers[-1]
         
-        # Build output heads
+        # Build output heads with smaller std for policy outputs
         self.heads_layers = nn.ModuleDict()
         if self.heads['discrete']['enabled']:
-            self.heads_layers['discrete'] = nn.Linear(
-                last_hidden, 
-                self.heads['discrete']['size']
+            self.heads_layers['discrete'] = self.layer_init(
+                nn.Linear(last_hidden, self.heads['discrete']['size']),
+                std=0.01  # Smaller std for policy output layer
             )
         if self.heads['continuous']['enabled']:
-            self.heads_layers['continuous'] = nn.Linear(
-                last_hidden, 
-                self.heads['continuous']['size']
-            )       
+            self.heads_layers['continuous'] = self.layer_init(
+                nn.Linear(last_hidden, self.heads['continuous']['size']),
+                std=0.01  # Smaller std for policy output layer
+            )
         self.to(self.device)
     def forward(self, x, process_state=True):
 
+        # If process_state is True, then we process the state to get the features (otherwise, we already collected trajectory, and state is in correct format)
         if process_state:
             x = x['store_inventories']
 
@@ -674,14 +705,15 @@ class HybridPolicy(PolicyNetwork):
 
         # add store dimension
         features = features.unsqueeze(1)
-
-        
+   
         outputs = {}
         if 'discrete' in self.heads_layers:
             outputs['discrete'] = self.heads_layers['discrete'](features)
+            # for debugging, make this constant and equal to 10
+            # outputs['discrete'] = torch.ones_like(outputs['discrete']) * 10
         if 'continuous' in self.heads_layers:
             # for test, make this constant and equal to 10
-            outputs['continuous'] = torch.ones_like(outputs['discrete']) * 10
+            outputs['continuous'] = torch.ones_like(outputs['discrete']) * torch.inf
             # outputs['continuous'] = self.heads_layers['continuous'](features)
             
         return outputs

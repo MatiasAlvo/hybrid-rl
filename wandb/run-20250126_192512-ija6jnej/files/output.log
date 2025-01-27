@@ -1,0 +1,20 @@
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+/user/ma4177/Exp_neural/src/utils/logger.py:173: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.current_metrics[f"weights_stats/{name}_std"] = param.data.std().item()
+/user/ma4177/Exp_neural/src/utils/logger.py:182: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.current_metrics[f"grads_stats/{name}_std"] = param.grad.std().item()
+Epoch 0: Train Loss = 14.0816, Dev Loss = 13.8463
+Epoch 1: Train Loss = 13.7739, Dev Loss = 13.6153
+Epoch 2: Train Loss = 13.4533, Dev Loss = 13.2326
+Epoch 3: Train Loss = 13.1956, Dev Loss = 12.9136
+Epoch 4: Train Loss = 12.8892, Dev Loss = 12.8218
+Traceback (most recent call last):
+  File "/user/ma4177/Exp_neural/main_run.py", line 241, in <module>
+    trainer.train(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 50, in train
+    train_metrics = self.do_one_epoch(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 159, in do_one_epoch
+    batch_metrics = optimizer_wrapper.optimize(trajectory_data)
+  File "/user/ma4177/Exp_neural/src/algorithms/hybrid/optimizer_wrappers/hybrid_wrapper.py", line 141, in optimize
+    epoch_v_loss += v_loss.item()
+KeyboardInterrupt

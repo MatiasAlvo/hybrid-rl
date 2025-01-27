@@ -1,0 +1,23 @@
+2025-01-26 16:32:11,221 INFO    MainThread:30128 [wandb_setup.py:_flush():68] Current SDK version is 0.19.3
+2025-01-26 16:32:11,221 INFO    MainThread:30128 [wandb_setup.py:_flush():68] Configure stats pid to 30128
+2025-01-26 16:32:11,221 INFO    MainThread:30128 [wandb_setup.py:_flush():68] Loading settings from /user/ma4177/.config/wandb/settings
+2025-01-26 16:32:11,222 INFO    MainThread:30128 [wandb_setup.py:_flush():68] Loading settings from /user/ma4177/Exp_neural/wandb/settings
+2025-01-26 16:32:11,222 INFO    MainThread:30128 [wandb_setup.py:_flush():68] Loading settings from environment variables
+2025-01-26 16:32:11,223 INFO    MainThread:30128 [wandb_init.py:_log_setup():598] Logging user logs to /user/ma4177/Exp_neural/wandb/run-20250126_163211-ro6liqi1/logs/debug.log
+2025-01-26 16:32:11,224 INFO    MainThread:30128 [wandb_init.py:_log_setup():599] Logging internal logs to /user/ma4177/Exp_neural/wandb/run-20250126_163211-ro6liqi1/logs/debug-internal.log
+2025-01-26 16:32:11,225 INFO    MainThread:30128 [wandb_init.py:init():714] calling init triggers
+2025-01-26 16:32:11,225 INFO    MainThread:30128 [wandb_init.py:init():719] wandb.init called with sweep_config: {}
+config: {'epochs': 1000, 'do_dev_every_n_epochs': 1, 'print_results_every_n_epochs': 1, 'save_model': False, 'epochs_between_save': 1, 'choose_best_model_on': 'dev_loss', 'load_previous_model': False, 'load_model_path': 'models/saved_models/your_model.pt', 'save_model_folders': ['2025_01_26', 'hybrid_policy'], 'save_model_filename': 1737927131, 'logging_params': {'use_wandb': True, 'use_tensorboard': True, 'wandb_project_name': 'inventory_control', 'wandb_entity': 'alvomatias', 'exp_name': 'hybrid_general', 'env_name': 'inventory'}, 'problem_params': {'n_stores': 1, 'n_warehouses': 0, 'n_extra_echelons': 0, 'lost_demand': True, 'maximize_profit': False, 'is_hybrid': True, 'discrete_features': {'fixed_ordering_cost': {'thresholds': [-0.0001, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 'values': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}}}, 'observation_params': {'include_warehouse_inventory': False, 'include_static_features': {'holding_costs': True, 'underage_costs': True, 'procurement_costs': True, 'lead_times': True, 'upper_bounds': False, 'mean': False, 'std': False}, 'demand': {'past_periods': 0, 'period_shift': 0}, 'include_past_observations': {'arrivals': 0, 'orders': 0}, 'time_features_file': None, 'time_features': None, 'sample_features_file': None, 'sample_features': None}, 'params_by_dataset': {'train': {'n_samples': 8192, 'batch_size': 1024, 'periods': 50, 'ignore_periods': 16}, 'dev': {'n_samples': 8192, 'batch_size': 1024, 'periods': 50, 'ignore_periods': 16}, 'test': {'n_samples': 8192, 'batch_size': 1024, 'periods': 30, 'ignore_periods': 16}}, 'use_wandb': True, 'use_tensorboard': True, 'wandb_project_name': 'inventory_control', 'wandb_entity': 'alvomatias', 'exp_name': 'hybrid_general', 'env_name': 'inventory'}
+2025-01-26 16:32:11,225 INFO    MainThread:30128 [wandb_init.py:init():745] starting backend
+2025-01-26 16:32:11,441 INFO    MainThread:30128 [wandb_init.py:init():749] sending inform_init request
+2025-01-26 16:32:11,449 INFO    MainThread:30128 [backend.py:_multiprocessing_setup():104] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2025-01-26 16:32:11,451 INFO    MainThread:30128 [wandb_init.py:init():764] backend started and connected
+2025-01-26 16:32:11,452 INFO    MainThread:30128 [wandb_init.py:init():857] updated telemetry
+2025-01-26 16:32:11,466 INFO    MainThread:30128 [wandb_init.py:init():889] communicating run to backend with 90.0 second timeout
+2025-01-26 16:32:11,870 INFO    MainThread:30128 [wandb_init.py:init():941] starting run threads in backend
+2025-01-26 16:32:12,255 INFO    MainThread:30128 [wandb_run.py:_console_start():2420] atexit reg
+2025-01-26 16:32:12,255 INFO    MainThread:30128 [wandb_run.py:_redirect():2270] redirect: wrap_raw
+2025-01-26 16:32:12,255 INFO    MainThread:30128 [wandb_run.py:_redirect():2335] Wrapping output streams.
+2025-01-26 16:32:12,255 INFO    MainThread:30128 [wandb_run.py:_redirect():2360] Redirects installed.
+2025-01-26 16:32:12,259 INFO    MainThread:30128 [wandb_init.py:init():983] run started, returning control to user process
+2025-01-26 16:32:16,195 WARNING MsgRouterThr:30128 [router.py:message_loop():75] message_loop has been closed

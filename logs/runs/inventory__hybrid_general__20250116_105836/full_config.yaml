@@ -1,0 +1,91 @@
+choose_best_model_on: dev_loss
+do_dev_every_n_epochs: 1
+env_name: inventory
+epochs: 1000
+epochs_between_save: 1
+exp_name: hybrid_general
+load_model_path: models/saved_models/your_model.pt
+load_previous_model: false
+logging_params:
+  env_name: inventory
+  exp_name: hybrid_general
+  use_wandb: true
+  wandb_entity: alvomatias
+  wandb_project_name: inventory_control
+observation_params:
+  demand:
+    past_periods: 0
+    period_shift: 0
+  include_past_observations:
+    arrivals: 0
+    orders: 0
+  include_static_features:
+    holding_costs: true
+    lead_times: true
+    mean: false
+    procurement_costs: true
+    std: false
+    underage_costs: true
+    upper_bounds: false
+  include_warehouse_inventory: false
+  sample_features: null
+  sample_features_file: null
+  time_features: null
+  time_features_file: null
+params_by_dataset:
+  dev:
+    batch_size: 1024
+    ignore_periods: 16
+    n_samples: 8192
+    periods: 50
+  test:
+    batch_size: 1024
+    ignore_periods: 16
+    n_samples: 8192
+    periods: 30
+  train:
+    batch_size: 1024
+    ignore_periods: 16
+    n_samples: 8192
+    periods: 50
+print_results_every_n_epochs: 1
+problem_params:
+  discrete_features:
+    fixed_ordering_cost:
+      thresholds:
+      - -0.0001
+      - 0.0
+      - 1.0
+      - 2.0
+      - 3.0
+      - 4.0
+      - 5.0
+      - 6.0
+      - 7.0
+      - 8.0
+      - 9.0
+      values:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+  is_hybrid: true
+  lost_demand: true
+  maximize_profit: false
+  n_extra_echelons: 0
+  n_stores: 1
+  n_warehouses: 0
+save_model: false
+save_model_filename: 1737043116
+save_model_folders:
+- '2025_01_16'
+- hybrid_policy
+use_wandb: true
+wandb_entity: alvomatias
+wandb_project_name: inventory_control

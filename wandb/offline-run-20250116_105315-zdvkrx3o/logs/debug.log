@@ -1,0 +1,32 @@
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Current SDK version is 0.16.6
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Configure stats pid to 110067
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Loading settings from /user/ma4177/.config/wandb/settings
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Loading settings from /user/ma4177/Exp_neural/wandb/settings
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Loading settings from environment variables: {}
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Applying setup settings: {'_disable_service': False}
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Inferring run settings from compute environment: {'program_relpath': 'testing.py', 'program_abspath': '/user/ma4177/Exp_neural/testing.py', 'program': '/user/ma4177/Exp_neural/testing.py'}
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Applying login settings: {}
+2025-01-16 10:53:15,540 INFO    MainThread:110067 [wandb_setup.py:_flush():76] Applying login settings: {'mode': 'offline'}
+2025-01-16 10:53:15,541 INFO    MainThread:110067 [wandb_init.py:_log_setup():521] Logging user logs to /user/ma4177/Exp_neural/wandb/offline-run-20250116_105315-zdvkrx3o/logs/debug.log
+2025-01-16 10:53:15,541 INFO    MainThread:110067 [wandb_init.py:_log_setup():522] Logging internal logs to /user/ma4177/Exp_neural/wandb/offline-run-20250116_105315-zdvkrx3o/logs/debug-internal.log
+2025-01-16 10:53:15,541 INFO    MainThread:110067 [wandb_init.py:init():561] calling init triggers
+2025-01-16 10:53:15,541 INFO    MainThread:110067 [wandb_init.py:init():568] wandb.init called with sweep_config: {}
+config: {'learning_rate': 0.02, 'architecture': 'CNN', 'dataset': 'CIFAR-100', 'epochs': 10}
+2025-01-16 10:53:15,541 INFO    MainThread:110067 [wandb_init.py:init():611] starting backend
+2025-01-16 10:53:15,541 INFO    MainThread:110067 [wandb_init.py:init():615] setting up manager
+2025-01-16 10:53:15,542 INFO    MainThread:110067 [backend.py:_multiprocessing_setup():105] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2025-01-16 10:53:15,543 INFO    MainThread:110067 [wandb_init.py:init():623] backend started and connected
+2025-01-16 10:53:15,544 INFO    MainThread:110067 [wandb_init.py:init():715] updated telemetry
+2025-01-16 10:53:15,559 INFO    MainThread:110067 [wandb_init.py:init():748] communicating run to backend with 90.0 second timeout
+2025-01-16 10:53:15,562 INFO    MainThread:110067 [wandb_init.py:init():799] starting run threads in backend
+2025-01-16 10:53:18,942 INFO    MainThread:110067 [wandb_run.py:_console_start():2335] atexit reg
+2025-01-16 10:53:18,942 INFO    MainThread:110067 [wandb_run.py:_redirect():2190] redirect: wrap_raw
+2025-01-16 10:53:18,942 INFO    MainThread:110067 [wandb_run.py:_redirect():2255] Wrapping output streams.
+2025-01-16 10:53:18,942 INFO    MainThread:110067 [wandb_run.py:_redirect():2280] Redirects installed.
+2025-01-16 10:53:18,943 INFO    MainThread:110067 [wandb_init.py:init():842] run started, returning control to user process
+2025-01-16 10:53:18,944 INFO    MainThread:110067 [wandb_run.py:_finish():2064] finishing run my-awesome-project/zdvkrx3o
+2025-01-16 10:53:18,944 INFO    MainThread:110067 [wandb_run.py:_atexit_cleanup():2304] got exitcode: 0
+2025-01-16 10:53:18,944 INFO    MainThread:110067 [wandb_run.py:_restore():2287] restore
+2025-01-16 10:53:18,944 INFO    MainThread:110067 [wandb_run.py:_restore():2293] restore done
+2025-01-16 10:53:21,104 INFO    MainThread:110067 [wandb_run.py:_footer_history_summary_info():3936] rendering history
+2025-01-16 10:53:21,105 INFO    MainThread:110067 [wandb_run.py:_footer_history_summary_info():3968] rendering summary

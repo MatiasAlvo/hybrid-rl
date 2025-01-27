@@ -205,6 +205,7 @@ class RangeManager:
                   f"mean {logits.mean().item():.3f}")
         
         probs = F.softmax(logits, dim=-1)
+        # print(f'probs: {probs[0]}')
         
         # Debug probabilities
         if (probs < 0).any() or (probs > 1).any():
@@ -218,6 +219,7 @@ class RangeManager:
             probs = F.one_hot(indices, num_classes=logits.size(-1)).float()
         elif sample:
             try:
+
                 indices = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1)  # Sample from last dim
                 probs = torch.zeros_like(probs)
                 probs.scatter_(-1, indices.view(probs.shape[:-1] + (1,)), 1)  # Place 1s in last dim
@@ -229,7 +231,7 @@ class RangeManager:
                 print("Any Inf:", torch.isinf(probs).any())
                 print("Any negative:", (probs < 0).any())
                 raise e
-        
+        # print(f'average probs: {probs.mean(dim=0)}')
         return probs
     
     def get_continuous_values(self, raw_values):

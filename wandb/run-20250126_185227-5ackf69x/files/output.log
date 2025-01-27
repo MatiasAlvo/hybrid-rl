@@ -1,0 +1,58 @@
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+Logging metric: train/loss/total with value: 14.01164794921875 at step: 0
+[34m[1mwandb[0m: [33mWARNING[0m Step cannot be set when using tensorboard syncing. Please use `run.define_metric(...)` to define a custom metric to log your step values.
+Logging metric: train/loss/reported with value: 12.8475341796875 at step: 0
+Logging metric: train/loss/value with value: 7.721083182096482 at step: 0
+Logging metric: train/loss/policy with value: -0.8994905466213823 at step: 0
+Logging metric: train/loss/entropy with value: 2.301696742326021 at step: 0
+Logging metric: train/policy/approx_kl with value: 0.00020974622862518014 at step: 0
+Logging metric: train/policy/clipfrac with value: 0.0 at step: 0
+Logging metric: train/policy/explained_var with value: -0.007954403758049011 at step: 0
+Logging metric: train/policy/state_value_correlation with value: 0.6248694281093776 at step: 0
+Logging metric: train/policy/value_return_correlation with value: 0.3354072570800781 at step: 0
+Logging metric: train/optimization/total_epochs with value: 10.0 at step: 0
+Logging metric: dev/loss/total with value: 13.7598388671875 at step: 0
+Logging metric: dev/loss/reported with value: 12.424136891084558 at step: 0
+/user/ma4177/Exp_neural/src/utils/logger.py:189: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"weights_stats/{name}_std", param.data.std(), step)
+/user/ma4177/Exp_neural/src/utils/logger.py:200: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /opt/conda/conda-bld/pytorch_1729647382455/work/aten/src/ATen/native/ReduceOps.cpp:1823.)
+  self.writer.add_scalar(f"grads_stats/{name}_std", param.grad.std(), step)
+Epoch 0: Train Loss = 14.0116, Dev Loss = 13.7598
+Logging metric: train/loss/total with value: 13.60264404296875 at step: 1
+Logging metric: train/loss/reported with value: 12.291518267463236 at step: 1
+Logging metric: train/loss/value with value: 6.067517317831517 at step: 1
+Logging metric: train/loss/policy with value: -0.33931373513769364 at step: 1
+Logging metric: train/loss/entropy with value: 2.2977563217282295 at step: 1
+Logging metric: train/policy/approx_kl with value: 0.00023828628662534552 at step: 1
+Logging metric: train/policy/clipfrac with value: 6.83593716530595e-05 at step: 1
+Logging metric: train/policy/explained_var with value: -0.00893518328666687 at step: 1
+Logging metric: train/policy/state_value_correlation with value: -0.7369437478482723 at step: 1
+Logging metric: train/policy/value_return_correlation with value: -0.012379598221741617 at step: 1
+Logging metric: train/optimization/total_epochs with value: 10.0 at step: 1
+Logging metric: dev/loss/total with value: 13.435625 at step: 1
+Logging metric: dev/loss/reported with value: 12.119973575367647 at step: 1
+Epoch 1: Train Loss = 13.6026, Dev Loss = 13.4356
+Traceback (most recent call last):
+  File "/user/ma4177/Exp_neural/main_run.py", line 241, in <module>
+    trainer.train(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 68, in train
+    dev_metrics = self.do_one_epoch(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 148, in do_one_epoch
+    total_reward, reward_to_report, trajectory_data = self.simulate_batch(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 231, in simulate_batch
+    model_output = model(observation_and_internal_data)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/user/ma4177/Exp_neural/src/algorithms/hybrid/agents/hybrid_agent.py", line 50, in forward
+    value = self.value_net(observation) if self.value_net is not None else None
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1844, in _call_impl
+    return inner()
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1790, in inner
+    result = forward_call(*args, **kwargs)
+  File "/user/ma4177/Exp_neural/src/algorithms/common/values/value_network.py", line 86, in forward
+    features = torch.cat([x[key].flatten(start_dim=1) for key in self.observation_keys if key != 'current_period'], dim=-1)
+KeyboardInterrupt

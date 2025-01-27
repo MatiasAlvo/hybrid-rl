@@ -1,0 +1,15 @@
+{"time":"2025-01-26T18:17:51.494306784-05:00","level":"INFO","msg":"stream: starting","core version":"0.19.3","symlink path":"/user/ma4177/Exp_neural/wandb/run-20250126_181751-rzfbww22/logs/debug-core.log"}
+{"time":"2025-01-26T18:17:51.705534558-05:00","level":"INFO","msg":"created new stream","id":"rzfbww22"}
+{"time":"2025-01-26T18:17:51.705589848-05:00","level":"INFO","msg":"stream: started","id":"rzfbww22"}
+{"time":"2025-01-26T18:17:51.705652817-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"rzfbww22"}
+{"time":"2025-01-26T18:17:51.705694096-05:00","level":"INFO","msg":"handler: started","stream_id":"rzfbww22"}
+{"time":"2025-01-26T18:17:51.705760316-05:00","level":"INFO","msg":"sender: started","stream_id":"rzfbww22"}
+{"time":"2025-01-26T18:17:51.908908094-05:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-01-26T18:18:26.512922259-05:00","level":"INFO","msg":"stream: closing","id":"rzfbww22"}
+{"time":"2025-01-26T18:18:26.512993198-05:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-01-26T18:18:26.514017926-05:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-01-26T18:18:26.891596215-05:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-01-26T18:18:27.021621749-05:00","level":"INFO","msg":"handler: closed","stream_id":"rzfbww22"}
+{"time":"2025-01-26T18:18:27.021674538-05:00","level":"INFO","msg":"writer: Close: closed","stream_id":"rzfbww22"}
+{"time":"2025-01-26T18:18:27.021711118-05:00","level":"INFO","msg":"sender: closed","stream_id":"rzfbww22"}
+{"time":"2025-01-26T18:18:27.023690445-05:00","level":"INFO","msg":"stream: closed","id":"rzfbww22"}

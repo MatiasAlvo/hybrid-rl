@@ -10,6 +10,7 @@ import os
 import copy
 import datetime
 import matplotlib.pyplot as plt
+from src.utils.logger import Logger
 
 
 class Trainer():
@@ -37,11 +38,18 @@ class Trainer():
 
     def train(self, epochs, loss_function, simulator, model, data_loaders, 
               optimizer_wrapper, problem_params, observation_params, 
-              params_by_dataset, trainer_params):
+              params_by_dataset, trainer_params, config):
         """Training loop using optimizer_wrapper for parameter updates"""
+        
+        # Initialize logger with complete config
+        logger = Logger(config, model)
+        global_step = 0
+        
+        final_metrics = {}  # Store the final metrics
+        
         for epoch in range(epochs):
             # Training epoch
-            train_loss, train_loss_to_report = self.do_one_epoch(
+            train_metrics = self.do_one_epoch(
                 optimizer_wrapper,
                 data_loaders['train'],
                 loss_function,
@@ -53,11 +61,13 @@ class Trainer():
                 train=True,
                 ignore_periods=params_by_dataset['train']['ignore_periods']
             )
-            self.all_train_losses.append(train_loss_to_report)
-
+            
+            # After first forward pass, model should be initialized
+            logger.watch_model()  # This will only take effect once
+            
             # Validation epoch
             with torch.no_grad():
-                dev_loss, dev_loss_to_report = self.do_one_epoch(
+                dev_metrics = self.do_one_epoch(
                     optimizer_wrapper,
                     data_loaders['dev'],
                     loss_function,
@@ -69,17 +79,45 @@ class Trainer():
                     train=False,
                     ignore_periods=params_by_dataset['dev']['ignore_periods']
                 )
-            self.all_dev_losses.append(dev_loss_to_report)
-
+            
+            # Log metrics
+            logger.log_metrics(train_metrics, epoch, prefix='train')
+            logger.log_metrics(dev_metrics, epoch, prefix='dev')
+            logger.log_model_weights(model, epoch)
+            
+            # Log action distribution if available
+            if 'actions' in train_metrics:
+                logger.log_action_distribution(train_metrics['actions'], epoch)
+            
+            # Flush all metrics to wandb at once
+            logger.flush_metrics()
+            
             # Update best parameters and save if needed
             self.update_best_params_and_save(
-                epoch, train_loss_to_report, dev_loss_to_report, 
-                trainer_params, model, optimizer_wrapper.optimizer
+                epoch, 
+                train_metrics['loss/total'], 
+                dev_metrics['loss/total'],
+                trainer_params, 
+                model, 
+                optimizer_wrapper.optimizer
             )
-
+            
             # Log progress
             if epoch % trainer_params['print_results_every_n_epochs'] == 0:
-                print(f'Epoch {epoch}: Train Loss = {train_loss_to_report:.4f}, Dev Loss = {dev_loss_to_report:.4f}')
+                print(f'Epoch {epoch}: Train Loss = {train_metrics["loss/total"]:.4f}, '
+                      f'Dev Loss = {dev_metrics["loss/total"]:.4f}')
+            
+            # Store the final metrics
+            final_metrics.update(train_metrics)
+            final_metrics.update({f"dev/{k}": v for k, v in dev_metrics.items()})
+            
+            # Early stopping if needed
+            if dev_metrics['loss/reported'] < self.best_performance_data['dev_loss']:
+                self.best_performance_data['dev_loss'] = dev_metrics['loss/reported']
+                self.best_performance_data['epoch'] = epoch
+        
+        logger.close()
+        return final_metrics
 
     def test(self, loss_function, simulator, model, data_loaders, optimizer, problem_params, observation_params, params_by_dataset, discrete_allocation=False):
 
@@ -101,7 +139,10 @@ class Trainer():
                 discrete_allocation=discrete_allocation
                 )
         
-        return average_test_loss, average_test_loss_to_report
+        return {
+            'loss/total': average_test_loss,
+            'loss/reported': average_test_loss_to_report
+        }
 
     def do_one_epoch(self, optimizer_wrapper, data_loader, loss_function, simulator, model, periods, problem_params, observation_params, train=True, ignore_periods=0, discrete_allocation=False):
         """
@@ -112,6 +153,9 @@ class Trainer():
         epoch_loss_to_report = 0  # Loss ignoring the first 'ignore_periods' periods
         total_samples = len(data_loader.dataset)
         periods_tracking_loss = periods - ignore_periods  # Number of periods for which we report the loss
+        
+        optimizer_metrics_sum = None
+        num_batches = 0
 
         for i, data_batch in enumerate(data_loader):  # Loop through batches of data
             data_batch = self.move_batch_to_device(data_batch)
@@ -121,14 +165,35 @@ class Trainer():
                 loss_function, simulator, model, periods, problem_params, data_batch, observation_params, ignore_periods, discrete_allocation, collect_trajectories=True
                 )
             
+            # Always accumulate simulator metrics
             epoch_loss += total_reward.item()  # Rewards from period 0
             epoch_loss_to_report += reward_to_report.item()  # Rewards from period ignore_periods onwards
             
-            # If training, let optimizer_wrapper handle the optimization
+            # If training, get optimizer metrics but don't use them for loss tracking
             if train and model.trainable:
-                optimizer_wrapper.optimize(trajectory_data)
+                batch_metrics = optimizer_wrapper.optimize(trajectory_data)
+                
+                # Accumulate optimizer metrics separately
+                if optimizer_metrics_sum is None:
+                    optimizer_metrics_sum = {k: v for k, v in batch_metrics.items()}
+                else:
+                    for k, v in batch_metrics.items():
+                        optimizer_metrics_sum[k] += v
+                num_batches += 1
+
+        # Calculate average metrics using simulator results
+        metrics = {
+            'loss/total': epoch_loss/(total_samples*periods*problem_params['n_stores']),
+            'loss/reported': epoch_loss_to_report/(total_samples*periods_tracking_loss*problem_params['n_stores'])
+        }
         
-        return epoch_loss/(total_samples*periods*problem_params['n_stores']), epoch_loss_to_report/(total_samples*periods_tracking_loss*problem_params['n_stores'])
+        # Add optimizer metrics if available
+        if optimizer_metrics_sum is not None:
+            for k, v in optimizer_metrics_sum.items():
+                if k not in ['loss/total', 'loss/reported']:  # Don't overwrite simulator metrics
+                    metrics[k] = v / num_batches
+
+        return metrics
     
     def simulate_batch(self, loss_function, simulator, model, periods, problem_params, data_batch, observation_params, ignore_periods=0, discrete_allocation=False, collect_trajectories=False):
         """
@@ -157,19 +222,22 @@ class Trainer():
             trajectory_data = {
                 'observations': [],
                 'rewards': [],
+                'actions': [],
                 'logits': [],
                 'values': [],
                 'terminated': []
             }
 
         observation, _ = simulator.reset(periods, problem_params, data_batch, observation_params)
+        # # set a fixed seed for debugging
+        # torch.manual_seed(0)
+        # np.random.seed(0)
         
         for t in range(periods):
             # Store observation if collecting trajectories
             vectorized_obs = self.vectorize_observation(observation, observation_keys)
-            if vectorized_obs is not None:
-                # Deep clone the observation to ensure it's completely detached
-                trajectory_data['observations'].append(vectorized_obs.detach().clone())
+            # if vectorized_obs is not None:
+            #     trajectory_data['observations'].append(vectorized_obs.detach().clone())
 
             # Add internal data to observation
             observation_and_internal_data = {k: v for k, v in observation.items()}
@@ -178,12 +246,10 @@ class Trainer():
             # Sample action and get policy outputs
             model_output = model(observation_and_internal_data)
             action_dict = model_output.get('action_dict')
-            logits = action_dict.get('logits', None)
             value = model_output.get('value', None)
 
             if discrete_allocation:
-                action_dict = {key: val.round() for key, val in action_dict.items()}
-            
+                action_dict = {key: val.round() for key, val in action_dict.items()}            
 
             # Execute environment step
             next_observation, reward, terminated, _, _ = simulator.step(observation, action_dict)
@@ -191,16 +257,20 @@ class Trainer():
 
             # Store trajectory data with proper detaching and cloning
             if collect_trajectories:
-                if logits is not None:
-                    # Ensure logits are properly detached and cloned
-                    detached_logits = logits.flatten(start_dim=1).detach().clone()
-                    trajectory_data['logits'].append(detached_logits)
-                    
+                if vectorized_obs is not None:
+                    trajectory_data['observations'].append(vectorized_obs.detach().clone())
+                trajectory_data['actions'].append(action_dict['discrete_actions'].detach().clone())
+                trajectory_data['logits'].append(action_dict['action_logits'].detach().clone())
                 if value is not None:
                     trajectory_data['values'].append(value.detach().clone())
                 trajectory_data['rewards'].append(reward.detach().clone())
                 trajectory_data['terminated'].append(torch.tensor(terminated).detach().clone())
 
+            #     # print [-1][0] of every list in trajectory_data
+            #     for key, value in trajectory_data.items():
+            #         if key != 'terminated':
+            #             print(f'{key}: {value[-1][0]}')
+            # print()
             # Update running rewards
             batch_reward += total_reward
             if t >= ignore_periods:
@@ -218,6 +288,14 @@ class Trainer():
                 k: torch.stack(v) if v[0] is not None else None 
                 for k, v in trajectory_data.items()
             }
+
+        # print the shape of the trajectory data
+        # print(f'trajectory_data["observations"].shape: {trajectory_data["observations"].shape}')
+        # print(f'trajectory_data["actions"].shape: {trajectory_data["actions"].shape}')
+        # print(f'trajectory_data["logits"].shape: {trajectory_data["logits"].shape}')
+        # print(f'trajectory_data["values"].shape: {trajectory_data["values"].shape}')
+        # print(f'trajectory_data["rewards"].shape: {trajectory_data["rewards"].shape}')
+        # print(f'trajectory_data["terminated"].shape: {trajectory_data["terminated"].shape}')
         
         trajectory_data['next_observation'] = observation
 
@@ -344,7 +422,10 @@ class Trainer():
         # Build vector using specified keys
         for key in observation_keys:
             if key in observation:
-                vectors.append(observation[key].reshape(observation[key].shape[0], -1).clone())  # Use clone to ensure the return is frozen
+                to_append = observation[key]
+                if to_append.shape[0] != observation['store_inventories'].shape[0]:
+                    to_append = to_append.expand(observation['store_inventories'].shape[0], -1)
+                vectors.append(to_append.reshape(to_append.shape[0], -1).clone().to(self.device))  # Use clone to ensure the return is frozen
         
         if not vectors:  # If nothing to track, return None
             return None

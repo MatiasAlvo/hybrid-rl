@@ -1,5 +1,5 @@
 trainer_params:
-  'epochs': 100
+  'epochs': 10
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -10,10 +10,31 @@ trainer_params:
   'save_model_folders': ['hybrid_general']
   'save_model_filename': 'model'
 
+logging_params:
+  'use_wandb': true
+  'use_tensorboard': true
+  'wandb_project_name': "inventory_control"
+  'wandb_entity': "alvomatias"
+  'exp_name': "hybrid_general"
+  'env_name': "inventory"
+
 optimizer_params:
-  'learning_rate': 0.0001
+  'learning_rate': 0.00001
   'weight_decay': 0.0
-  'gradient_clip': null
+  'gradient_clip': 1.0
+  'ppo_params':
+    'clip_coef': 0.2
+    'num_epochs': 10
+    'num_minibatches': 4
+    'target_kl': 0.015
+    'normalize_advantages': false
+    'clip_value_loss': false
+    'entropy_coef': 0.01
+    'value_function_coef': 0.5
+    'max_grad_norm': 0.5
+    'gamma': 0.95
+    'gae_lambda': 0.99
+    'use_gae': true
 
 nn_params:
   policy_network:
@@ -37,10 +58,10 @@ nn_params:
     enabled: true
     hidden_layers: [64, 64]
     activation: 'elu'
-    dropout: 0.1
+    dropout: 0.0
     batch_norm: false
     observation_keys: [
-      'store_inventories'
+      'store_inventories',
       # 'past_demands',
       # 'current_period'
     ]

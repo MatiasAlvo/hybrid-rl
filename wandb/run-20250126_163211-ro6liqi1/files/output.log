@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/user/ma4177/Exp_neural/main_run.py", line 240, in <module>
+    trainer.train(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 64, in train
+    train_metrics = self.do_one_epoch(
+  File "/user/ma4177/Exp_neural/src/training/trainer.py", line 172, in do_one_epoch
+    batch_metrics = optimizer_wrapper.optimize(trajectory_data)
+  File "/user/ma4177/Exp_neural/src/algorithms/hybrid/optimizer_wrappers/hybrid_wrapper.py", line 166, in optimize
+    explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+  File "<__array_function__ internals>", line 180, in var
+  File "/user/ma4177/.conda/envs/exp_neural/lib/python3.10/site-packages/numpy/core/fromnumeric.py", line 3609, in _var_dispatcher
+    def _var_dispatcher(a, axis=None, dtype=None, out=None, ddof=None,
+KeyboardInterrupt
