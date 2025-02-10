@@ -17,10 +17,69 @@ class Logger:
             config: Dictionary containing logging configuration
             model: Optional model to watch with W&B
         """
-        # Create a more specific run name including timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_name = f"{config.logging_params.get('env_name', 'inventory')}__{config.logging_params.get('exp_name', 'experiment')}__{timestamp}"
+        logging_params = config.hyperparams_config.get('logging_params', {})
+        self.use_wandb = logging_params.get('use_wandb', False)
+        self.use_tensorboard = logging_params.get('use_tensorboard', False)
         
+        # If no logging is enabled, return early
+        if not (self.use_wandb or self.use_tensorboard):
+            return
+            
+        self.current_metrics = {}
+        self.model_watched = False
+        
+        # Create run name from timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Extract setting name from config
+        setting_name = config.setting_config.get('setting_name', 'default')
+        
+        # Set up run name first
+        exp_name = logging_params.get('exp_name', 'default')
+        env_name = logging_params.get('env_name', 'default')
+        self.run_name = f"{env_name}__{exp_name}__{timestamp}"
+        
+        # Set up logging directory only if needed
+        if self.use_tensorboard:
+            self.log_dir = self._setup_log_dir(config)
+            
+            # Initialize tensorboard
+            self.writer = SummaryWriter(self.log_dir)
+        
+        # Initialize W&B if enabled
+        if self.use_wandb and wandb.run is None:
+            try:
+                wandb.init(
+                    project="inventory_control",
+                    config=config.get_complete_config(),
+                    name=f"inventory__{setting_name}__{timestamp}",
+                    settings=wandb.Settings(start_method="thread")
+                )
+                print("Successfully initialized or connected to wandb")
+            except Exception as e:
+                print(f"Warning: Could not initialize wandb: {e}")
+                print("Continuing without wandb logging...")
+                self.use_wandb = False
+        
+        # Log hyperparameters only if logging is enabled
+        if self.use_wandb or self.use_tensorboard:
+            self._log_hyperparameters(config)
+        
+        print(f"Logging to: {self.log_dir}")  # Print the log directory for verification
+        
+        self.step_counter = 0  # Add a step counter
+        if self.use_wandb:
+            print(f"Config: {config}")
+            if model is not None:
+                self.model = model  # Store model reference
+        self.model = model  # Store model reference
+        self.best_metrics = {
+            'train/loss/best': float('inf'),
+            'dev/loss/best': float('inf'),
+            'test/loss/best': float('inf')
+        }
+
+    def _setup_log_dir(self, config: Dict[str, Any]):
         # Create absolute path for logs
         root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.log_dir = os.path.join(root_dir, "logs", "runs", self.run_name)
@@ -28,35 +87,7 @@ class Logger:
         # Create log directory if it doesn't exist
         os.makedirs(self.log_dir, exist_ok=True)
         
-        # Initialize TensorBoard with absolute path
-        self.writer = SummaryWriter(log_dir=self.log_dir)
-        
-        print(f"Logging to: {self.log_dir}")  # Print the log directory for verification
-        
-        # Log hyperparameters in an organized way
-        self._log_hyperparameters(config)
-        
-        # Initialize W&B if enabled
-        self.use_wandb = config.logging_params.get('use_wandb', False)
-        print(f"W&B enabled: {self.use_wandb}")  # Debug print
-        
-        self.step_counter = 0  # Add a step counter
-        self.current_metrics = {}  # Add a dictionary to store metrics
-        if self.use_wandb:
-            print(f"Initializing W&B with project: {config.logging_params.get('wandb_project_name', 'inventory_control')}, entity: {config.logging_params.get('wandb_entity', None)}")
-            print(f"Config: {config}")
-            wandb.init(
-                project=config.logging_params.get('wandb_project_name', 'inventory_control'),
-                sync_tensorboard=True,
-                config=config,
-                name=self.run_name,
-                monitor_gym=False,  # Disable gym monitoring
-                save_code=True,
-            )
-            if model is not None:
-                self.model = model  # Store model reference
-        self.model = model  # Store model reference
-        self.model_watched = False  # Flag to track if model has been watched
+        return self.log_dir
 
     def _log_hyperparameters(self, config: Dict[str, Any]):
         """
@@ -112,11 +143,11 @@ class Logger:
             markdown_text += "\n"
 
         # Add any custom discrete features if present
-        if 'discrete_features' in config.problem_params:
+        if 'discrete_features' in config.setting_config.get('problem_params', {}):
             markdown_text += "## Discrete Features\n"
             markdown_text += "|Feature|Thresholds|Values|\n|-|-|-|\n"
             
-            for feature, data in config.problem_params['discrete_features'].items():
+            for feature, data in config.setting_config.get('problem_params', {}).get('discrete_features', {}).items():
                 if isinstance(data, dict):  # Skip if None
                     thresholds = data.get('thresholds', [])
                     values = data.get('values', [])
@@ -147,39 +178,48 @@ class Logger:
                 print(f"Failed to watch model in W&B: {e}")
 
     def log_metrics(self, metrics: Dict[str, float], epoch: Optional[int] = None, prefix: str = ""):
-        """
-        Store metrics in the current_metrics dictionary
-        """
-        # Try to watch model if not already watching
-        if not self.model_watched:
-            self.watch_model()
+        """Store metrics and track best values"""
+        if not (self.use_wandb or self.use_tensorboard):
+            return
             
+        # Update best metrics
+        if f"{prefix}/loss/total" in metrics:
+            current_loss = metrics[f"{prefix}/loss/total"]
+            best_key = f"{prefix}/loss/best"
+            self.best_metrics[best_key] = min(self.best_metrics[best_key], current_loss)
+            self.current_metrics[best_key] = self.best_metrics[best_key]
+        
+        # Regular metric logging
         for name, value in metrics.items():
             if prefix:
                 name = f"{prefix}/{name}"
-            self.writer.add_scalar(name, value, epoch)  # Still log to tensorboard immediately
             self.current_metrics[name] = value
+        
+        if epoch is not None:
             self.current_metrics['epoch'] = epoch
-    
+
     def log_model_weights(self, model: torch.nn.Module, step: int):
         """Log model weight histograms and statistics"""
+        if not (self.use_wandb or self.use_tensorboard):
+            return
+            
         for name, param in model.named_parameters():
             # Log parameter values to tensorboard
             if param.data is not None:
                 self.writer.add_histogram(f"weights/{name}", param.data, step)
                 
-                # Store statistics in current_metrics
+                # Store statistics in current_metrics, using unbiased=False for std
                 self.current_metrics[f"weights_stats/{name}_mean"] = param.data.mean().item()
-                self.current_metrics[f"weights_stats/{name}_std"] = param.data.std().item()
+                self.current_metrics[f"weights_stats/{name}_std"] = param.data.std(unbiased=False).item()
                 self.current_metrics[f"weights_stats/{name}_norm"] = param.data.norm().item()
             
             # Log gradients if they exist
             if param.grad is not None:
                 self.writer.add_histogram(f"grads/{name}", param.grad, step)
                 
-                # Store gradient statistics in current_metrics
+                # Store gradient statistics in current_metrics, using unbiased=False for std
                 self.current_metrics[f"grads_stats/{name}_mean"] = param.grad.mean().item()
-                self.current_metrics[f"grads_stats/{name}_std"] = param.grad.std().item()
+                self.current_metrics[f"grads_stats/{name}_std"] = param.grad.std(unbiased=False).item()
                 self.current_metrics[f"grads_stats/{name}_norm"] = param.grad.norm().item()
     
     def log_action_distribution(self, actions: torch.Tensor, step: int):
@@ -196,13 +236,23 @@ class Logger:
         """
         Log all stored metrics to wandb and clear the current_metrics dictionary
         """
-        if self.use_wandb and self.current_metrics:
+        if not self.use_wandb:
+            return
+            
+        try:
             wandb.log(self.current_metrics)
-            self.current_metrics = {}  # Clear the metrics after logging
+        except Exception as e:
+            print(f"Warning: Failed to log metrics to wandb: {e}")
+        self.current_metrics = {}  # Clear the metrics after logging
 
     def close(self):
         """Close all logging connections"""
-        self.flush_metrics()  # Ensure any remaining metrics are logged
-        self.writer.close()
         if self.use_wandb:
-            wandb.finish() 
+            self.flush_metrics()
+            try:
+                wandb.finish()
+            except Exception as e:
+                print(f"Warning: Error closing wandb: {e}")
+        
+        if self.use_tensorboard:
+            self.writer.close() 

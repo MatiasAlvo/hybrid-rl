@@ -1,5 +1,5 @@
 trainer_params:
-  'epochs': 10
+  'epochs': 200
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -20,6 +20,7 @@ logging_params:
 
 optimizer_params:
   'learning_rate': 0.00001
+  'anneal_lr': true
   'weight_decay': 0.0
   'gradient_clip': 1.0
   'ppo_params':
@@ -28,36 +29,41 @@ optimizer_params:
     'num_minibatches': 4
     'target_kl': 0.015
     'normalize_advantages': false
+    'reward_scaling': false
     'clip_value_loss': false
     'entropy_coef': 0.01
     'value_function_coef': 0.5
     'max_grad_norm': 0.5
     'gamma': 0.95
     'gae_lambda': 0.99
-    'use_gae': true
+    'use_gae': false
+    'buffer_periods': 0
 
 nn_params:
   policy_network:
     name: 'hybrid_policy'
     input_size: 2
     hidden_layers: [64, 64]
-    activation: 'ELU'
+    activation: 'Tanh'
+    # activation: 'ReLU'
+    # activation: 'ELU'
     dropout: 0.0
     batch_norm: false
     heads:
       discrete:
         enabled: true
         size: 4
-        activation: 'linear'
+        activation: 'Linear'
       continuous:
         enabled: true
         size: 4
-        activation: 'linear'
+        activation: 'Linear'
 
   value_network:
     enabled: true
     hidden_layers: [64, 64]
-    activation: 'elu'
+    activation: 'ReLU'
+    # activation: 'ELU'
     dropout: 0.0
     batch_norm: false
     observation_keys: [

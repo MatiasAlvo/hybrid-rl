@@ -58,7 +58,7 @@ class FeatureRegistry:
             )
             # Get indices of selected actions (where the 1s are in discrete_probs)
             discrete_actions = discrete_probs.argmax(dim=-1)  # This gives us indices instead of one-hot
-            # Get logits for selected actions
+            # Get logits for selected actions - using gather with proper reshaping
             action_logits = raw_outputs['discrete'].gather(-1, discrete_actions.unsqueeze(-1)).squeeze(-1)
         
         # Get continuous values if continuous head exists

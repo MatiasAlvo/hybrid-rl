@@ -26,6 +26,7 @@ class Trainer():
         self.device = device
         self.time_stamp = self.get_time_stamp()
         self.best_performance_data = {'train_loss': np.inf, 'dev_loss': np.inf, 'last_epoch_saved': -1000, 'model_params_to_save': None}
+        self.logger = None  # Initialize logger as None
     
     def reset(self):
         """
@@ -41,13 +42,32 @@ class Trainer():
               params_by_dataset, trainer_params, config):
         """Training loop using optimizer_wrapper for parameter updates"""
         
-        # Initialize logger with complete config
-        logger = Logger(config, model)
+        # Initialize logger only if logging is enabled in config
+        logging_params = config.hyperparams_config.get('logging_params', {})
+        if logging_params.get('use_wandb', False) or logging_params.get('use_tensorboard', False):
+            self.logger = Logger(config, model)
+        else:
+            self.logger = None
+            
         global_step = 0
         
-        final_metrics = {}  # Store the final metrics
+        # Get learning rate annealing parameters
+        optimizer_params = config.hyperparams_config.get('optimizer_params', {})
+        initial_lr = optimizer_params.get('learning_rate', 0.0003)
+        anneal_lr = optimizer_params.get('anneal_lr', False)
         
         for epoch in range(epochs):
+            # Update learning rate if annealing is enabled
+            if anneal_lr:
+                frac = 1.0 - (epoch / epochs)
+                new_lr = frac * initial_lr
+                for param_group in optimizer_wrapper.optimizer.param_groups:
+                    param_group['lr'] = new_lr
+                
+                # Log LR if logger exists
+                if self.logger is not None:
+                    self.logger.log_metrics({'train/learning_rate': new_lr}, epoch)
+            
             # Training epoch
             train_metrics = self.do_one_epoch(
                 optimizer_wrapper,
@@ -63,7 +83,8 @@ class Trainer():
             )
             
             # After first forward pass, model should be initialized
-            logger.watch_model()  # This will only take effect once
+            if self.logger is not None:
+                self.logger.watch_model()  # This will only take effect once
             
             # Validation epoch
             with torch.no_grad():
@@ -80,17 +101,16 @@ class Trainer():
                     ignore_periods=params_by_dataset['dev']['ignore_periods']
                 )
             
-            # Log metrics
-            logger.log_metrics(train_metrics, epoch, prefix='train')
-            logger.log_metrics(dev_metrics, epoch, prefix='dev')
-            logger.log_model_weights(model, epoch)
-            
-            # Log action distribution if available
-            if 'actions' in train_metrics:
-                logger.log_action_distribution(train_metrics['actions'], epoch)
-            
-            # Flush all metrics to wandb at once
-            logger.flush_metrics()
+            # Only log if logger exists
+            if self.logger is not None:
+                self.logger.log_metrics(train_metrics, epoch, prefix='train')
+                self.logger.log_metrics(dev_metrics, epoch, prefix='dev')
+                self.logger.log_model_weights(model, epoch)
+                
+                if 'actions' in train_metrics:
+                    self.logger.log_action_distribution(train_metrics['actions'], epoch)
+                
+                self.logger.flush_metrics()
             
             # Update best parameters and save if needed
             self.update_best_params_and_save(
@@ -104,28 +124,32 @@ class Trainer():
             
             # Log progress
             if epoch % trainer_params['print_results_every_n_epochs'] == 0:
-                print(f'Epoch {epoch}: Train Loss = {train_metrics["loss/total"]:.4f}, '
-                      f'Dev Loss = {dev_metrics["loss/total"]:.4f}')
-            
-            # Store the final metrics
-            final_metrics.update(train_metrics)
-            final_metrics.update({f"dev/{k}": v for k, v in dev_metrics.items()})
-            
-            # Early stopping if needed
-            if dev_metrics['loss/reported'] < self.best_performance_data['dev_loss']:
-                self.best_performance_data['dev_loss'] = dev_metrics['loss/reported']
-                self.best_performance_data['epoch'] = epoch
-        
-        logger.close()
-        return final_metrics
+                print(f'Epoch {epoch}: Train Loss = {train_metrics["loss/reported"]:.4f}, '
+                      f'Dev Loss = {dev_metrics["loss/reported"]:.4f}')
+        # log best train loss and dev loss, if there is a logger
+        if self.logger is not None:
+            self.logger.log_metrics({'train/loss/best': self.best_performance_data['train_loss'], 'dev/loss/best': self.best_performance_data['dev_loss']})
+            self.logger.flush_metrics()
+        return train_metrics, dev_metrics
 
     def test(self, loss_function, simulator, model, data_loaders, optimizer, problem_params, observation_params, params_by_dataset, discrete_allocation=False):
+        """Test the model using the best parameters found during training"""
+        if model.trainable:
+            if self.best_performance_data['model_params_to_save'] is not None:
+                # Load the parameter weights that gave the best performance
+                try:
+                    model.load_state_dict(self.best_performance_data['model_params_to_save'])
+                    print(f"Loaded best model with dev loss: {self.best_performance_data['dev_loss']:.4f}")
+                except RuntimeError as e:
+                    print(f"Error: Failed to load model state dict: {e}")
+                    raise
+            else:
+                print("Warning: No best model parameters found. Using current model state.")
 
-        if model.policy.trainable and self.best_performance_data['model_params_to_save'] is not None:
-            # Load the parameter weights that gave the best performance on the specified dataset
-            model.policy.load_state_dict(self.best_performance_data['model_params_to_save'])
+        # Put model in eval mode
+        model.eval()
 
-        average_test_loss, average_test_loss_to_report = self.do_one_epoch(
+        test_metrics = self.do_one_epoch(
                 optimizer, 
                 data_loaders['test'], 
                 loss_function, 
@@ -134,15 +158,24 @@ class Trainer():
                 params_by_dataset['test']['periods'], 
                 problem_params, 
                 observation_params, 
-                train=True, 
+                train=False,  # Changed to False since we're testing
                 ignore_periods=params_by_dataset['test']['ignore_periods'],
                 discrete_allocation=discrete_allocation
                 )
         
-        return {
-            'loss/total': average_test_loss,
-            'loss/reported': average_test_loss_to_report
-        }
+        # Log only if logger exists
+        if self.logger is not None:
+            scalar_metrics = {
+                'loss/reported': test_metrics['loss/reported'],
+                'loss/total': test_metrics['loss/total']
+            }
+            self.logger.log_metrics(scalar_metrics, prefix='test')
+            self.logger.flush_metrics()
+        
+        # Put model back in train mode
+        model.train()
+        
+        return test_metrics, None
 
     def do_one_epoch(self, optimizer_wrapper, data_loader, loss_function, simulator, model, periods, problem_params, observation_params, train=True, ignore_periods=0, discrete_allocation=False):
         """
@@ -150,30 +183,29 @@ class Trainer():
         """
         
         epoch_loss = 0
-        epoch_loss_to_report = 0  # Loss ignoring the first 'ignore_periods' periods
+        epoch_loss_to_report = 0
         total_samples = len(data_loader.dataset)
-        periods_tracking_loss = periods - ignore_periods  # Number of periods for which we report the loss
+        periods_tracking_loss = periods - ignore_periods
         
         optimizer_metrics_sum = None
         num_batches = 0
 
-        for i, data_batch in enumerate(data_loader):  # Loop through batches of data
+        for i, data_batch in enumerate(data_loader):
             data_batch = self.move_batch_to_device(data_batch)
             
             # Forward pass and simulation
             total_reward, reward_to_report, trajectory_data = self.simulate_batch(
                 loss_function, simulator, model, periods, problem_params, data_batch, observation_params, ignore_periods, discrete_allocation, collect_trajectories=True
-                )
+            )
             
             # Always accumulate simulator metrics
-            epoch_loss += total_reward.item()  # Rewards from period 0
-            epoch_loss_to_report += reward_to_report.item()  # Rewards from period ignore_periods onwards
+            epoch_loss += total_reward.item()
+            epoch_loss_to_report += reward_to_report.item()
             
             # If training, get optimizer metrics but don't use them for loss tracking
             if train and model.trainable:
                 batch_metrics = optimizer_wrapper.optimize(trajectory_data)
                 
-                # Accumulate optimizer metrics separately
                 if optimizer_metrics_sum is None:
                     optimizer_metrics_sum = {k: v for k, v in batch_metrics.items()}
                 else:
@@ -343,13 +375,13 @@ class Trainer():
         """
         Update best model parameters if it achieves best performance so far, and save the model
         """
-
         data_for_compare = {'train_loss': train_loss, 'dev_loss': dev_loss}
         if data_for_compare[trainer_params['choose_best_model_on']] < self.best_performance_data[trainer_params['choose_best_model_on']]:  
             self.best_performance_data['train_loss'] = train_loss
             self.best_performance_data['dev_loss'] = dev_loss
             if model.trainable:
-                self.best_performance_data['model_params_to_save'] = copy.deepcopy(model.policy.state_dict())
+                # Save the entire model's state dict instead of just the policy
+                self.best_performance_data['model_params_to_save'] = copy.deepcopy(model.state_dict())
             self.best_performance_data['update'] = True
 
         if trainer_params['save_model'] and model.policy.trainable:

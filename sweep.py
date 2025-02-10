@@ -2,7 +2,18 @@ import wandb
 import yaml
 import os
 import torch
+import ray
+import logging
+import time
+import tempfile
+from typing import List, Optional
 from main_run import run_training
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 def save_sweep_id(sweep_id, filename='sweep_id.txt'):
     """Save sweep_id to a file"""
@@ -16,164 +27,327 @@ def load_sweep_id(filename='sweep_id.txt'):
             return f.read().strip()
     return None
 
-def get_available_gpus():
-    """Get list of available GPU indices"""
-    return list(range(torch.cuda.device_count()))
-
-def parse_gpu_arg(gpu_arg):
-    """
-    Parse GPU argument to return list of GPU indices
-    Args:
-        gpu_arg: Can be:
-            - List of integers [0, 2, 3]
-            - String "available" or "all" for all available GPUs
-            - Single integer for one GPU
-    Returns:
-        List of GPU indices
-    """
-    if gpu_arg is None:
-        return [None]  # Use CPU
-    
-    if isinstance(gpu_arg, str):
-        if gpu_arg.lower() in ["available", "all"]:
-            return get_available_gpus()
-        # Handle comma-separated string
+@ray.remote(num_gpus=1)  # Explicitly request 1 GPU for each worker
+class TrainingWorker:
+    def __init__(self, gpu_id: int):
+        """Initialize worker with specific GPU"""
         try:
-            return [int(idx) for idx in gpu_arg.split(',')]
-        except ValueError:
-            raise ValueError(f"Invalid GPU specification: {gpu_arg}")
+            # Set the GPU for this worker
+            os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            self.gpu_id = gpu_id
+            
+            # Force torch to reinitialize CUDA
+            torch.cuda.empty_cache()
+            
+            # Verify CUDA is available
+            if not torch.cuda.is_available():
+                raise RuntimeError(f"CUDA not available after setting GPU {gpu_id}")
+            
+            # Set device and verify
+            torch.cuda.set_device(0)  # Use the first (and only) visible GPU
+            current_device = torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(current_device)
+            logging.info(f"Worker initialized on GPU {gpu_id} ({device_name})")
+            
+        except Exception as e:
+            logging.error(f"Failed to initialize GPU {gpu_id}: {str(e)}")
+            raise
     
-    if isinstance(gpu_arg, int):
-        return [gpu_arg]
-    
-    if isinstance(gpu_arg, list):
-        return gpu_arg
-    
-    raise ValueError(f"Invalid GPU specification: {gpu_arg}")
+    def run_sweep(self, sweep_id: str):
+        """Run a single sweep trial"""
+        try:
+            # Verify GPU is still properly set
+            if not torch.cuda.is_available():
+                raise RuntimeError(f"GPU {self.gpu_id} not available for sweep")
+            
+            current_device = torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(current_device)
+            pid = os.getpid()
+            logging.info(f"Process {pid} running sweep on GPU {self.gpu_id} ({device_name})")
+            
+            wandb.agent(
+                sweep_id,
+                function=lambda: train_sweep(wandb.config),  # Pass wandb.config explicitly
+                count=1,
+                project="inventory_control"
+            )
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error in sweep on GPU {self.gpu_id}: {str(e)}")
+            raise
 
-def run_agent_on_gpu(sweep_id, gpu_idx, count):
-    """Run a sweep agent on a specific GPU"""
-    if gpu_idx is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
-        print(f"Starting agent on GPU {gpu_idx}")
-    else:
-        print("Starting agent on CPU")
-    
-    wandb.agent(sweep_id, train_sweep, count=count)
+def train_sweep(config=None):
+    """Training function for sweep"""
+    try:
+        with wandb.init(project="inventory_control") as run:
+            sweep_config = run.config
+            
+            # Load the full configs
+            with open(sweep_config['config_files']['setting'], 'r') as file:
+                setting_config = yaml.safe_load(file)
+            with open(sweep_config['config_files']['hyperparams'], 'r') as file:
+                hyperparams_config = yaml.safe_load(file)
 
-# Define the sweep configuration
-sweep_config = {
-    'method': 'random',
-    'metric': {
-        'name': 'dev/loss/reported',  # This matches the metric name from your logger
-        'goal': 'minimize'
-    },
-    'parameters': {
-        'config_files': {
-            'value': {
-                'setting': 'configs/settings/hybrid_general.yml',
-                'hyperparams': 'configs/policies/hybrid_general_policy.yml'
+            # Define parameter mappings with their config destinations
+            param_mappings = {
+                'learning_rate': ('hyperparams', ['optimizer_params', 'learning_rate']),
+                'anneal_lr': ('hyperparams', ['optimizer_params', 'anneal_lr']),
+                'num_epochs': ('hyperparams', ['optimizer_params', 'ppo_params', 'num_epochs']),
+                'value_function_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'value_function_coef']),
+                'gamma': ('hyperparams', ['optimizer_params', 'ppo_params', 'gamma']),
+                'gae_lambda': ('hyperparams', ['optimizer_params', 'ppo_params', 'gae_lambda']),
+                'clip_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'clip_coef']),
+                'normalize_advantages': ('hyperparams', ['optimizer_params', 'ppo_params', 'normalize_advantages']),
+                'use_gae': ('hyperparams', ['optimizer_params', 'ppo_params', 'use_gae']),
+                'policy_activation': ('hyperparams', ['nn_params', 'policy_network', 'activation']),
+                'value_activation': ('hyperparams', ['nn_params', 'value_network', 'activation']),
+                'normalize_observations': ('setting', ['observation_params', 'normalize_observations']),
+                'reward_scaling': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling']),
+                'buffer_periods': ('hyperparams', ['optimizer_params', 'ppo_params', 'buffer_periods']),
             }
+            
+            # Update configs based on sweep parameters
+            for param_name, param_value in sweep_config.items():
+                if param_name in param_mappings:
+                    config_type, param_path = param_mappings[param_name]
+                    target_config = hyperparams_config if config_type == 'hyperparams' else setting_config
+                    
+                    # Navigate to the correct nested dict
+                    current_dict = target_config
+                    for key in param_path[:-1]:
+                        if key not in current_dict:
+                            current_dict[key] = {}
+                        current_dict = current_dict[key]
+                    current_dict[param_path[-1]] = param_value
+            
+            # Special handling for train_periods (affects multiple datasets)
+            if 'train_periods' in sweep_config:
+                for dataset in ['train', 'dev', 'test']:
+                    setting_config['params_by_dataset'][dataset]['periods'] = sweep_config['train_periods']
+
+            # Log all parameters explicitly
+            wandb.log({
+                "full_setting_config": setting_config,
+                "full_hyperparams_config": hyperparams_config,
+            }, commit=False)
+
+            # Let CUDA_VISIBLE_DEVICES handle the GPU mapping
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            hyperparams_config['device'] = device
+            
+            print("Starting sweep training and testing...")
+            train_metrics, dev_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode='both')
+
+            
+    except Exception as e:
+        print(f"Sweep run failed with error: {str(e)}")
+        logging.error(f"Sweep run failed with error: {str(e)}", exc_info=True)
+        raise
+
+def flatten_dict(d, parent_key='', sep='.'):
+    """Flatten a nested dictionary by concatenating keys with a separator."""
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+def create_sweep_config(config_files):
+    """Create sweep configuration with all hyperparameters from config files."""
+    # Load the full configs
+    with open(config_files['setting'], 'r') as file:
+        setting_config = yaml.safe_load(file)
+    with open(config_files['hyperparams'], 'r') as file:
+        hyperparams_config = yaml.safe_load(file)
+    
+    # Create base sweep config
+    sweep_config = {
+        'method': 'random',
+        'metric': {
+            'name': 'dev/loss/best',
+            'goal': 'minimize'
         },
-        'hyperparams.optimizer_params.learning_rate': {
-            'distribution': 'log_uniform_values',
-            'min': 1e-5,  # 0.00001
-            'max': 1e-2   # 0.01
-        },
-        'hyperparams.optimizer_params.ppo_params.num_epochs': {
-            'values': [5, 10, 15]
-        },
-        'hyperparams.optimizer_params.ppo_params.value_function_coef': {
-            'distribution': 'uniform',
-            'min': 0.3,
-            'max': 0.7
-        },
-        'hyperparams.optimizer_params.ppo_params.gamma': {
-            'distribution': 'uniform',
-            'min': 0.9,
-            'max': 0.99
-        },
-        'hyperparams.optimizer_params.ppo_params.gae_lambda': {
-            'distribution': 'uniform',
-            'min': 0.9,
-            'max': 0.99
+        'parameters': {
+            'config_files': {
+                'value': config_files
+            },
+            # Original parameters
+            'learning_rate': {
+                'distribution': 'log_uniform_values',
+                'min': 1e-5,
+                'max': 1e-3
+            },
+            'anneal_lr': {
+                # 'values': [False]
+                'values': [True, False]
+            },
+            'num_epochs': {
+                'values': [5, 10]
+            },
+            'value_function_coef': {
+                'distribution': 'log_uniform_values',
+                'min': 0.01,
+                'max': 1.0
+            },
+            'gamma': {
+                'distribution': 'uniform',
+                'min': 0.9,
+                'max': 0.99
+            },
+            'gae_lambda': {
+                'distribution': 'uniform',
+                'min': 0.9,
+                'max': 0.99
+            },
+            'clip_coef': {
+                'distribution': 'uniform',
+                'min': 0.1,
+                'max': 0.3
+            },
+            # New parameters
+            'policy_activation': {
+                'values': ['Tanh', 'ReLU', 'ELU']
+            },
+            'value_activation': {
+                'values': ['Tanh', 'ReLU', 'ELU']
+            },
+            'normalize_advantages': {
+                'values': [False, True]
+            },
+            'use_gae': {
+                'values': [True, False]
+            },
+            'normalize_observations': {
+                'values': [False, True]
+            },
+            'reward_scaling': {
+                'values': [False, True]
+            },
+            'buffer_periods': {
+                'values': [0, 20, 50]  # Adjust range as needed
+            },
+            # Store complete original configs
+            'setting_config': {
+                'value': setting_config
+            },
+            'hyperparams_config': {
+                'value': hyperparams_config
+            }
         }
     }
-}
-
-def train_sweep():
-    with wandb.init() as run:
-        # Get the files from the config
-        config_files = wandb.config.config_files
-        
-        # Load the base configs
-        with open(config_files['setting'], 'r') as f:
-            setting_config = yaml.safe_load(f)
-        with open(config_files['hyperparams'], 'r') as f:
-            hyperparams_config = yaml.safe_load(f)
-            
-        # Update the hyperparams config with sweep values
-        for key, value in wandb.config.items():
-            if key != 'config_files':  # Skip the config files entry
-                # Split the key into config type and path
-                config_type, *path = key.split('.')
-                
-                # Update the appropriate config
-                current = setting_config if config_type == 'setting' else hyperparams_config
-                
-                # Navigate to the correct nested location
-                for p in path[:-1]:
-                    current = current[p]
-                
-                # Update the value
-                current[path[-1]] = value
-        
-        # Run training and testing
-        train_metrics, test_metrics = run_training(setting_config, hyperparams_config)
-        
-        # Log test metrics
-        wandb.log({
-            "test/loss/total": test_metrics["loss/total"],
-            "test/loss/reported": test_metrics["loss/reported"]
-        })
+    
+    return sweep_config
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--create', action='store_true', help='Create a new sweep')
     parser.add_argument('--agent', action='store_true', help='Run sweep agent(s)')
-    parser.add_argument('--count', type=int, default=1, help='Number of runs per agent')
-    parser.add_argument('--gpu', type=str, help='GPU specification. Can be "all", "available", a single number, or a comma-separated list (e.g., "0,2,3")')
+    parser.add_argument('--count', type=int, default=1, help='Number of runs per GPU')
+    parser.add_argument('--gpus', nargs='+', type=int, required=True, help='List of GPU IDs to use')
     args = parser.parse_args()
 
+    config_files = {
+        'setting': 'configs/settings/hybrid_general.yml',
+        'hyperparams': 'configs/policies/hybrid_general_policy.yml'
+    }
+
     if args.create:
-        # Create a new sweep and save the ID
-        sweep_id = wandb.sweep(sweep_config, project="inventory_control")
+        # Create sweep config with all parameters
+        sweep_config = create_sweep_config(config_files)
+        
+        sweep_id = wandb.sweep(
+            sweep_config, 
+            project="inventory_control"
+        )
         save_sweep_id(sweep_id)
         print(f"Created sweep with ID: {sweep_id}")
     
     if args.agent:
-        # Load existing sweep ID
+        # Load the sweep ID
         sweep_id = load_sweep_id()
         if sweep_id is None:
-            raise ValueError("No sweep ID found. Create a sweep first using --create")
+            raise ValueError("No sweep ID found. Please create a sweep first using --create")
+            
+        # Start timing
+        start_time = time.time()
         
-        # Parse GPU argument
-        gpu_indices = parse_gpu_arg(args.gpu)
+        # Verify GPU availability first
+        available_gpus = []
+        for gpu_id in args.gpus:
+            try:
+                with torch.cuda.device(gpu_id):
+                    torch.cuda.get_device_name(gpu_id)
+                available_gpus.append(gpu_id)
+            except Exception as e:
+                logging.warning(f"GPU {gpu_id} not available: {str(e)}")
         
-        # Import multiprocessing here to avoid potential issues with CUDA initialization
-        import multiprocessing as mp
+        if not available_gpus:
+            raise RuntimeError("No requested GPUs are available")
         
-        # Create a process for each GPU
-        processes = []
-        for gpu_idx in gpu_indices:
-            p = mp.Process(
-                target=run_agent_on_gpu,
-                args=(sweep_id, gpu_idx, args.count)
-            )
-            p.start()
-            processes.append(p)
+        logging.info(f"Available GPUs: {available_gpus}")
         
-        # Wait for all processes to complete
-        for p in processes:
-            p.join() 
+        # Initialize Ray with explicit GPU configuration
+        ray.init(
+            num_cpus=len(available_gpus),
+            num_gpus=len(available_gpus),
+            include_dashboard=False,
+            ignore_reinit_error=True,
+            logging_level=logging.ERROR,
+            _temp_dir=tempfile.mkdtemp(),
+            runtime_env={
+                "env_vars": {
+                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, available_gpus))
+                }
+            }
+        )
+        
+        # Create workers only for available GPUs
+        workers = []
+        for gpu_id in available_gpus:
+            worker = TrainingWorker.remote(gpu_id)
+            workers.append(worker)
+        
+        logging.info(f"Created workers for GPUs: {available_gpus}")
+        
+        # Run sweeps
+        try:
+            futures = []
+            total_runs = len(available_gpus) * args.count
+            completed_runs = 0
+            
+            # Launch initial batch of runs
+            for worker in workers:
+                futures.append(worker.run_sweep.remote(sweep_id))
+                completed_runs += 1
+            
+            # Keep launching new runs as they complete
+            while completed_runs < total_runs:
+                # Wait for any run to complete
+                done_id, futures = ray.wait(futures, num_returns=1)
+                
+                # Launch next run on any available worker
+                if completed_runs < total_runs:
+                    # Round-robin worker selection
+                    worker_idx = completed_runs % len(workers)
+                    futures.append(workers[worker_idx].run_sweep.remote(sweep_id))
+                    completed_runs += 1
+                    logging.info(f"Completed {completed_runs}/{total_runs} runs")
+            
+            # Wait for remaining runs to complete
+            ray.get(futures)
+            
+        except KeyboardInterrupt:
+            logging.info("\nGracefully shutting down...")
+        except Exception as e:
+            logging.error(f"Error during sweep execution: {e}")
+        finally:
+            ray.shutdown()
+            
+        total_time = time.time() - start_time
+        logging.info(f"Sweep completed in {total_time:.2f} seconds")

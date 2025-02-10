@@ -33,8 +33,8 @@ problem_params:
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
-      'thresholds': [-0.0001, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]  # first and last values are the same across all discrete features
-      'values': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      'thresholds': [-0.0001, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]  # first and last values are the same across all discrete features
+      'values': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ]
       # 'thresholds': [0, 0.01, 7.0]  # first and last values are the same across all discrete features
       # 'values': [0.0, 20.0]
       # 'thresholds': [0, 4, 8, 12]  # first and last values are the same across all discrete features
@@ -63,6 +63,7 @@ observation_params:
   'time_features': null
   'sample_features_file': null
   'sample_features': null
+  'normalize_observations': false
 
 store_params: 
   'demand': 
@@ -105,17 +106,17 @@ echelon_params:
 
 params_by_dataset : 
   'train': 
-    'n_samples': 8192 
-    'batch_size': 1024  # Values tested: 1024, 8192
-    'periods': 50 
+    'n_samples': 1024 
+    'batch_size': 128  # Values tested: 1024, 8192
+    'periods': 200 
     'ignore_periods': 16 
   'dev': 
-    'n_samples': 8192 
-    'batch_size': 1024 
-    'periods': 50 
+    'n_samples': 1024 
+    'batch_size': 128 
+    'periods': 200 
     'ignore_periods': 16 
   'test': 
-    'n_samples': 8192 
-    'batch_size': 1024 
-    'periods': 30 
+    'n_samples': 1024 
+    'batch_size': 128 
+    'periods': 200
     'ignore_periods': 16

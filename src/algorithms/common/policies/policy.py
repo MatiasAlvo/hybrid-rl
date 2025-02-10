@@ -606,7 +606,7 @@ class PolicyNetwork(nn.Module):
         # Network architecture parameters
         self.input_size = policy_config['input_size']
         self.hidden_layers = policy_config['hidden_layers']
-        self.activation = policy_config['activation'].upper()  # Capitalize activation name
+        self.activation = policy_config['activation']  # Capitalize activation name
         self.dropout_rate = policy_config.get('dropout', 0.0)
         self.use_batch_norm = policy_config.get('batch_norm', False)
         

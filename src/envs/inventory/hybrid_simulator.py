@@ -17,25 +17,63 @@ class HybridSimulator(Simulator):
         self.cost_functions = {}
         self.transition_functions = {}
         
+        # Initialize normalization parameters
+        self.inventory_mean = 0.0
+        self.inventory_std = 1.0
+        self.normalize_observations = False
+        
+        # Store inventory observations during steps
+        self._inventory_observations = []
+        
     def reset(self, periods, problem_params, data, observation_params):
         """Initialize problem-specific cost and transition functions"""
         # Register cost functions based on problem parameters
         self._register_cost_functions(problem_params['discrete_features'])
         
-        return super().reset(periods, problem_params, data, observation_params)
+        # Get normalize_observations from observation_params
+        self.normalize_observations = observation_params.get('normalize_observations', False)
+        
+        # Compute normalization stats if we have collected data
+        if self.normalize_observations and len(self._inventory_observations) > 0:
+            self._compute_normalization_stats()
+        
+        # Clear the observations list for next batch
+        self._inventory_observations = []
+        
+        # Get base observation (unnormalized)
+        observation, info = super().reset(periods, problem_params, data, observation_params)
+        
+        # Store unnormalized observation internally
+        self._internal_observation = observation.copy()
+        
+        # Add initial observation to our collection
+        if self.normalize_observations:
+            self._inventory_observations.append(observation['store_inventories'][..., 0])
+            observation = self._normalize_observation(observation)
+        
+        return observation, info
     
     def step(self, observation, action_dict):
         """Execute one simulation step"""
-        # First handle basic transitions and costs (similar to base simulator)
-        next_state, base_costs = self._calculate_base_transitions_and_costs(observation, action_dict)
+        # Use internal unnormalized observation for calculations
+        next_observation, base_costs = self._calculate_base_transitions_and_costs(self._internal_observation, action_dict)
+        
+        # Update internal observation
+        self._internal_observation = next_observation.copy()
+        
+        # Store inventory on hand for normalization
+        if self.normalize_observations:
+            self._inventory_observations.append(next_observation['store_inventories'][..., 0].detach())
         
         # Then add additional costs from registered components
-        additional_costs = self._calculate_additional_costs(observation, action_dict)
+        additional_costs = self._calculate_additional_costs(self._internal_observation, action_dict)
         total_costs = base_costs + additional_costs
 
-        # print(f'total_costs: {total_costs[0]}')
-        # print()
-        return next_state, total_costs, False, {}, {}
+        # Return normalized observation if needed
+        if self.normalize_observations:
+            next_observation = self._normalize_observation(next_observation)
+
+        return next_observation, total_costs, False, {}, {}
         
     def _calculate_base_transitions_and_costs(self, observation, action_dict):
         """Calculate basic transitions and costs with proper in-place updates"""
@@ -261,3 +299,30 @@ class HybridSimulator(Simulator):
             ], 
             dim=2
         )
+
+    def _compute_normalization_stats(self):
+        """Compute mean and std using collected inventory observations"""
+        # Stack all observations along first dimension
+        all_inventories = torch.stack(self._inventory_observations, dim=0)  # shape: [n_steps, batch_size, n_stores]
+        
+        # Compute stats across all dimensions
+        self.inventory_mean = all_inventories.mean().item()
+        self.inventory_std = all_inventories.std().item()
+        if self.inventory_std == 0:
+            self.inventory_std = 1.0
+
+    def _normalize_observation(self, observation):
+        """Normalize inventory levels in observation"""
+        if not self.normalize_observations:
+            return observation
+            
+        normalized_observation = observation.copy()
+        store_inventory = observation['store_inventories']
+        
+        # Normalize inventory on hand
+        normalized_inventory = (store_inventory - self.inventory_mean) / self.inventory_std
+        
+        # Update only the inventory on hand part
+        normalized_observation['store_inventories'] = normalized_inventory
+        
+        return normalized_observation

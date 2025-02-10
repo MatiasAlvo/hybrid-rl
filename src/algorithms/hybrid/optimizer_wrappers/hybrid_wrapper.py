@@ -16,96 +16,153 @@ class HybridWrapper(BaseOptimizerWrapper):
        trajectory_data = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
                         for k, v in trajectory_data.items()}
        
+       
+       # Get PPO parameters and prepare data
+       clip_coef = self.ppo_params.get('clip_coef', 0.2)
+       num_ppo_epochs = self.ppo_params.get('num_epochs', 1)
+       target_kl = self.ppo_params.get('target_kl', None)
+       reward_scaling = self.ppo_params.get('reward_scaling', False)
+       
+       if reward_scaling:
+           rewards_std = trajectory_data['rewards'].std()
+           if rewards_std > 0:
+               trajectory_data['rewards'] = trajectory_data['rewards'] / (rewards_std + 1e-8)
+       
+       # First compute advantages and returns
        advantages, returns = self.compute_advantages(trajectory_data)
        advantages, returns = advantages.detach(), returns.detach()
        
        T, B = advantages.shape
        batch_size = T * B
-
+       minibatch_size = batch_size // self.ppo_params.get('num_minibatches', 4)
        
-       # Flatten all batches
+       # Get buffer size
+       buffer_periods = self.ppo_params.get('buffer_periods', 0)
+       
+       # Calculate effective trajectory length after buffer
+       effective_T = T - 2 * buffer_periods if buffer_periods > 0 else T
+       
+       if effective_T <= 0:
+           raise ValueError(f"Buffer size {buffer_periods} too large for trajectory length {T}")
+       
+       # Create slice for effective trajectory
+       effective_slice = slice(buffer_periods, T - buffer_periods) if buffer_periods > 0 else slice(None)
+       
+       # Flatten all batches, applying buffer
        tensors = {
-           'observations': trajectory_data['observations'].reshape(batch_size, -1),
-           'actions': trajectory_data['actions'].reshape(batch_size),  # Actions are indices
-           'logits': trajectory_data['logits'].reshape(batch_size),    # Logits for selected actions
-           'advantages': advantages.reshape(batch_size),
-           'returns': returns.reshape(batch_size),
-           'values': trajectory_data['values'].reshape(batch_size)
+           'observations': trajectory_data['observations'][effective_slice].reshape(effective_T * B, -1),
+           'actions': trajectory_data['actions'][effective_slice].reshape(effective_T * B),
+           'logits': trajectory_data['logits'][effective_slice].reshape(effective_T * B),
+           'advantages': advantages[effective_slice].reshape(effective_T * B),
+           'returns': returns[effective_slice].reshape(effective_T * B),
+           'values': trajectory_data['values'][effective_slice].reshape(effective_T * B)
        }
-    #    print(f'tensors["observations"].shape: {tensors["observations"].shape}')
-
        tensors = {k: v.detach() for k, v in tensors.items()}
        
-       # Use parameters from config instead of hardcoded values
-       clip_coef = self.ppo_params.get('clip_coef', 0.2)
-       num_ppo_epochs = self.ppo_params.get('num_epochs', 10)
-       minibatch_size = T*B // self.ppo_params.get('num_minibatches', 4)
-       target_kl = self.ppo_params.get('target_kl', 0.015)
-       norm_adv = self.ppo_params.get('normalize_advantages', False)
+       # Update batch size for minibatch computation
+       batch_size = effective_T * B
+       minibatch_size = batch_size // self.ppo_params.get('num_minibatches', 4)
+       
+       # Get parameters from config
+       norm_adv = self.ppo_params.get('normalize_advantages', True)
        clip_vloss = self.ppo_params.get('clip_value_loss', False)
        ent_coef = self.ppo_params.get('entropy_coef', 0.01)
        vf_coef = self.ppo_params.get('value_function_coef', 0.5)
        max_grad_norm = self.ppo_params.get('max_grad_norm', 0.5)
        
+       # Initialize metrics
        total_loss = 0
-       total_v_loss = 0  # Track value loss separately
+       total_v_loss = 0
        total_pg_loss = 0
        total_entropy_loss = 0
+       clipfracs = []
+       approx_kls = []
+       
+       # Track first and last values
+       first_clipfrac = None
+       first_approx_kl = None
+       last_clipfrac = None
+       last_approx_kl = None
+       
+       # Track at which epoch and batch we stopped
+       early_stop_epoch = num_ppo_epochs
+       early_stop_batch = None
+       
+       # Pre-compute correlation metrics and value diagnostics
+       with torch.no_grad():
+           # Apply buffer to diagnostics
+           effective_slice = slice(buffer_periods, T - buffer_periods) if buffer_periods > 0 else slice(None)
+           flat_values = trajectory_data['values'][effective_slice].reshape(-1)
+           flat_returns = returns[effective_slice].reshape(-1)
+           
+           # Returns Correlation
+           returns_corr = torch.corrcoef(torch.stack([flat_values, flat_returns]))[0,1].item()
+           
+           # R² Score
+           mean_returns = flat_returns.mean()
+           ss_tot = ((flat_returns - mean_returns) ** 2).sum()
+           ss_res = ((flat_returns - flat_values) ** 2).sum()
+           r2_score = 1 - (ss_res / ss_tot)
+           
+           # Value Error Analysis by Episode Stage
+           early_stage = slice(0, T//3)
+           mid_stage = slice(T//3, 2*T//3)
+           late_stage = slice(2*T//3, T)
+           
+           def compute_stage_metrics(stage_slice):
+               stage_values = trajectory_data['values'][stage_slice].reshape(-1)
+               stage_returns = returns[stage_slice].reshape(-1)
+               mae = (stage_values - stage_returns).abs().mean()
+               mse = ((stage_values - stage_returns) ** 2).mean()
+               return {'mae': mae.item(), 'mse': mse.item()}
+           
+           stage_metrics = {
+               'early': compute_stage_metrics(early_stage),
+               'mid': compute_stage_metrics(mid_stage),
+               'late': compute_stage_metrics(late_stage)
+           }
+           
+           # Value prediction distribution analysis
+           value_stats = {
+               'mean': flat_values.mean().item(),
+               'std': flat_values.std().item(),
+               'min': flat_values.min().item(),
+               'max': flat_values.max().item(),
+           }
+           returns_stats = {
+               'mean': flat_returns.mean().item(),
+               'std': flat_returns.std().item(),
+               'min': flat_returns.min().item(),
+               'max': flat_returns.max().item(),
+           }
+       
        b_inds = torch.arange(batch_size, device=self.device)
        
-       clipfracs = []
-       explained_vars = []
-       state_values_correlations = []
-       value_return_correlations = []
-       approx_kls = []
-       early_stop_epochs = []
-       
-       # Track at which epoch we stopped
-       early_stop_epoch = num_ppo_epochs  # Default to max epochs if no early stopping
-       
        for epoch in range(num_ppo_epochs):
-           counter = 0
-           epoch_v_loss = 0
-           num_minibatches = 0
            perm = torch.randperm(batch_size, device=self.device)
            b_inds = b_inds[perm]
            
            for start in range(0, batch_size, minibatch_size):
                end = start + minibatch_size
                mb_inds = b_inds[start:end]
-               num_minibatches += 1
                
                mb_obs = tensors['observations'][mb_inds]
                mb_actions = tensors['actions'][mb_inds]
                
-               
-               # Get logits for specific actions, value, and entropy
                newlogits, newvalue, entropy = self.model.get_logits_value_and_entropy(mb_obs, mb_actions)
                
-               # Calculate log ratio directly from logits
                logratio = newlogits - tensors['logits'][mb_inds].unsqueeze(-1)
-               if counter == 0 and False:
-                    print(f'newlogits: {newlogits[0]}')
-                    print(f'tensors["logits"][mb_inds]: {tensors["logits"][mb_inds][0]}')
-                    print(f'logratio: {logratio[0]}')
-                    counter += 1
-               
-               # Debug log ratios before exp
-               if torch.isnan(logratio).any() or torch.isinf(logratio).any():
-                   print("\nWarning: Extreme values in log ratio before exp:")
-                   print(f"Log ratio range: [{logratio.min().item():.3f}, {logratio.max().item():.3f}]")
-                   print(f"Log ratio mean: {logratio.mean().item():.3f}")
-                   print(f"New logits range: [{newlogits.min().item():.3f}, {newlogits.max().item():.3f}]")
-                   print(f"Old logits range: [{tensors['logits'][mb_inds].min().item():.3f}, {tensors['logits'][mb_inds].max().item():.3f}]")
-               
-               # Clip log ratios to prevent extreme values
-               logratio = torch.clamp(logratio, -20, 20)  # exp(20) is already very large
+               logratio = torch.clamp(logratio, -20, 20)
                ratio = logratio.exp()
                
                with torch.no_grad():
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    approx_kls.append(approx_kl.item())
-
+                   approx_kl = ((ratio - 1) - logratio).mean()
+                   approx_kls.append(approx_kl.item())
+                   
+                   if first_approx_kl is None:
+                       first_approx_kl = approx_kl.item()
+                   last_approx_kl = approx_kl.item()
+               
                mb_advantages = tensors['advantages'][mb_inds]
                if norm_adv:
                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
@@ -116,6 +173,7 @@ class HybridWrapper(BaseOptimizerWrapper):
                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
                
                if clip_vloss:
+                   raise NotImplementedError("Clip value loss not implemented")
                    v_loss_unclipped = (newvalue - tensors['returns'][mb_inds]) ** 2
                    v_clipped = tensors['values'][mb_inds] + torch.clamp(
                        newvalue - tensors['values'][mb_inds],
@@ -125,12 +183,11 @@ class HybridWrapper(BaseOptimizerWrapper):
                    v_loss_clipped = (v_clipped - tensors['returns'][mb_inds]) ** 2
                    v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
                else:
-                   v_loss = 0.5 * ((newvalue - tensors['returns'][mb_inds]) ** 2).mean()                   
+                   v_loss = 0.5 * ((newvalue.squeeze() - tensors['returns'][mb_inds]) ** 2).mean()
                
                entropy_loss = entropy.mean()
             #    loss = v_loss * vf_coef
                loss = pg_loss + v_loss * vf_coef
-            #    loss = pg_loss - ent_coef * entropy_loss + v_loss * vf_coef
                
                self.optimizer.zero_grad(set_to_none=True)
                loss.backward()
@@ -138,66 +195,68 @@ class HybridWrapper(BaseOptimizerWrapper):
                    nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
                self.optimizer.step()
                
-               epoch_v_loss += v_loss.item()
-               
                total_loss += loss.item()
                total_v_loss += v_loss.item()
                total_pg_loss += pg_loss.item()
                total_entropy_loss += entropy_loss.item()
-
-           if target_kl is not None and approx_kl > target_kl:
-               early_stop_epochs.append(epoch)  # Record when we stopped
-               print(f"Early stopping at epoch {epoch} due to KL divergence of {approx_kl}.")
-               break
+               
+               clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean().item()
+               clipfracs.append(clipfrac)
+               
+               if first_clipfrac is None:
+                   first_clipfrac = clipfrac
+               last_clipfrac = clipfrac
+               
+               if target_kl is not None and approx_kl > target_kl:
+                   early_stop_epoch = epoch
+                   early_stop_batch = start // minibatch_size
+                   break
        
-       # Check if different states get different values
-       state_values_correlation = torch.corrcoef(torch.stack([
-           tensors['observations'].sum(dim=1),  # Simplistic state representation
-           tensors['values'].squeeze()
-       ]))[0,1]
-       state_values_correlations.append(state_values_correlation.item())
-       rewards = trajectory_data['rewards'][20:50]
-       discounted_rewards = torch.zeros_like(rewards[0:20])
-       for t in range(20):
-           discounted_rewards[t] = rewards[t:t+10].sum(dim=0)
-       values = trajectory_data['values'][20:40]
-       value_return_correlation = torch.corrcoef(torch.stack([
-               values.flatten(), 
-               discounted_rewards.flatten()
-           ]))[0,1].item()
-       value_return_correlations.append(value_return_correlation)
-       # Calculate clipfrac
-       clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean().item()
-       clipfracs.append(clipfrac)
-
+       # Compute final metrics
+       num_updates = (early_stop_epoch * (batch_size // minibatch_size)) + 1
        
        # Calculate explained variance
        with torch.no_grad():
-           y_pred = newvalue.cpu().numpy()
-           y_true = tensors['returns'][mb_inds].cpu().numpy()
+           y_pred = tensors['values'].cpu().numpy()
+           y_true = tensors['returns'].cpu().numpy()
            var_y = np.var(y_true)
            explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-           explained_vars.append(explained_var)
        
-       # Calculate average metrics
        metrics = {
-           'loss/total': total_loss / (num_ppo_epochs * (batch_size // minibatch_size)),
-           'loss/value': total_v_loss / (num_ppo_epochs * (batch_size // minibatch_size)),
-           'loss/policy': total_pg_loss / (num_ppo_epochs * (batch_size // minibatch_size)),
-           'loss/entropy': total_entropy_loss / (num_ppo_epochs * (batch_size // minibatch_size)),
+           'loss/total': total_loss / num_updates,
+           'loss/value': total_v_loss / num_updates,
+           'loss/policy': total_pg_loss / num_updates,
+           'loss/entropy': total_entropy_loss / num_updates,
            'policy/approx_kl': np.mean(approx_kls),
+           'policy/approx_kl_first': first_approx_kl,
+           'policy/approx_kl_last': last_approx_kl,
            'policy/clipfrac': np.mean(clipfracs),
-           'policy/explained_var': np.mean(explained_vars),
-           'policy/state_value_correlation': np.mean(state_values_correlations),
-           'policy/value_return_correlation': np.mean(value_return_correlations),
+           'policy/clipfrac_first': first_clipfrac,
+           'policy/clipfrac_last': last_clipfrac,
+           'policy/explained_var': explained_var,
+           'optimization/total_epochs': early_stop_epoch,
+           'optimization/early_stop_batch': early_stop_batch if early_stop_batch is not None else -1,
+           'value/returns_correlation': returns_corr,
+           'value/r2_score': r2_score,
+           'value/pred_mean': value_stats['mean'],
+           'value/pred_std': value_stats['std'],
+           'value/returns_mean': returns_stats['mean'],
+           'value/returns_std': returns_stats['std'],
+           'value/early_stage_mae': stage_metrics['early']['mae'],
+           'value/mid_stage_mae': stage_metrics['mid']['mae'],
+           'value/late_stage_mae': stage_metrics['late']['mae'],
+           'value/early_stage_mse': stage_metrics['early']['mse'],
+           'value/mid_stage_mse': stage_metrics['mid']['mse'],
+           'value/late_stage_mse': stage_metrics['late']['mse'],
        }
-       
-       # Add early stopping info to metrics
-       metrics['optimization/total_epochs'] = early_stop_epoch
        
        return metrics
 
    def compute_advantages(self, trajectory_data):
+       # Add debugging for advantage computation
+    #    print("\n=== Advantage Computation Diagnostics ===")
+    #    print(f"Initial shapes - rewards: {trajectory_data['rewards'].shape}, values: {trajectory_data['values'].shape}")
+       
        # Get parameters from config
        gamma = self.ppo_params.get('gamma', 0.95)
        gae_lambda = self.ppo_params.get('gae_lambda', 0.99)
@@ -205,14 +264,9 @@ class HybridWrapper(BaseOptimizerWrapper):
        
        T, B = trajectory_data['rewards'].shape
 
-       # Standardize rewards more efficiently by computing mean and std only once
-       rewards = trajectory_data['rewards']
-       mean_rewards = rewards.mean()
-       std_rewards = rewards.std() + 1e-8
-       trajectory_data['rewards'] = (rewards - mean_rewards) / std_rewards
-
        with torch.no_grad():
            next_value = self.model.value_net(trajectory_data['next_observation'])
+        #    print(f"Next value shape: {next_value.shape}, mean: {next_value.mean():.3f}, std: {next_value.std():.3f}")
            values = trajectory_data['values'].reshape(T, B)
            rewards = trajectory_data['rewards']
            
@@ -229,8 +283,14 @@ class HybridWrapper(BaseOptimizerWrapper):
                # New alternative implementation
                returns = torch.zeros_like(rewards, device=self.device)
                for t in reversed(range(T)):
+                #    next_return = 0 if t == T - 1 else returns[t + 1]
                    next_return = next_value.squeeze() if t == T - 1 else returns[t + 1]
                    returns[t] = rewards[t] + gamma * next_return
                advantages = returns - values
 
+        #    print("\n=== Final Advantage Stats ===")
+        #    print(f"Advantages - mean: {advantages.mean():.3f}, std: {advantages.std():.3f}")
+        #    print(f"Returns - mean: {returns.mean():.3f}, std: {returns.std():.3f}")
+
        return advantages, returns
+

@@ -351,7 +351,7 @@ class Simulator(gym.Env):
             'past_demands': {'low': -np.inf, 'high': np.inf, 'dtype': np.float32},
             'past_demands': {'low': -np.inf, 'high': np.inf, 'dtype': np.float32},
             'warehouse_upper_bound': {'low': 0, 'high': np.inf, 'dtype': np.float32},
-            'current_period': {'low': 0, 'high': periods, 'dtype': np.int8},
+            'current_period': {'low': 0, 'high': periods, 'dtype': np.int16},
         })
 
         return spaces.Dict(

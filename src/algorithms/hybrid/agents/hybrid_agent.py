@@ -48,7 +48,19 @@ class HybridAgent(BaseAgent):
         # print(f'average discrete_probs: {action_dict["discrete_probs"].mean(dim=0)}')
         # Get value if value network exists
         value = self.value_net(observation) if self.value_net is not None else None
-        
+
+        # I want to override action_dict['feature_actions']['total_action'] for testing purposes
+        # I am implementing a base stock policy with a cap in orders. therefore, first get total inventory across time
+        # get difference between total inventory and base stock level (in this case is 19)
+        # then, get difference between total action and difference
+        # then, set total action to total action - difference
+        # finally, cap the action at 6
+        # total_inventory = observation['store_inventories'].sum(dim=2)
+        # base_stock_level = 19
+        # difference = base_stock_level - total_inventory
+        # total_action = torch.clip(difference, max=6)
+        # action_dict['feature_actions']['total_action'] = total_action
+        # print(f'total_action: {total_action[0]}')
         return {
             'action_dict': action_dict,
             'value': value,

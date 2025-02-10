@@ -5,6 +5,7 @@ import sys
 from collections import defaultdict as DefaultDict
 import logging
 from datetime import datetime
+import os
 
 # Core imports
 from src import np, torch, yaml
@@ -49,32 +50,47 @@ def get_date_folder():
     """Get folder name based on current date"""
     return datetime.now().strftime("%Y%m%d")
 
-def run_training(setting_config, hyperparams_config):
+def run_training(setting_config, hyperparams_config, mode='both'):
     """
-    Run training and testing with given configurations
-    Returns: (train_metrics, test_metrics)
+    Run training and/or testing with given configurations
+    Args:
+        setting_config: Configuration for problem settings
+        hyperparams_config: Configuration for hyperparameters
+        mode: str, one of ['train', 'test', 'both']
+    Returns: (train_metrics, test_metrics) - any can be None depending on mode
     """
-    # Set device
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    # Use device from config, respecting CUDA_VISIBLE_DEVICES
+    if torch.cuda.is_available():
+        device = "cuda:0"
+    else:
+        device = "cpu"
+    
+    print(f"Training on device: {device}")
+    print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES')}")
+    if torch.cuda.is_available():
+        print(f"GPU Name: {torch.cuda.get_device_name(0)}")
+    
+    # Update config with correct device
+    hyperparams_config['device'] = device
 
     # Create config object
     config = Config(setting_config, hyperparams_config)
 
     # Extract parameters from configs
-    problem_params = config.problem_params
-    store_params = config.store_params
-    warehouse_params = config.warehouse_params
-    echelon_params = config.echelon_params
-    observation_params = config.observation_params
-    sample_data_params = config.sample_data_params
-    params_by_dataset = config.params_by_dataset
-    seeds = config.seeds
-    test_seeds = config.test_seeds
+    problem_params = config.setting_config['problem_params']
+    store_params = config.setting_config['store_params']
+    warehouse_params = config.setting_config['warehouse_params']
+    echelon_params = config.setting_config['echelon_params']
+    observation_params = config.setting_config['observation_params']
+    sample_data_params = config.setting_config['sample_data_params']
+    params_by_dataset = config.setting_config['params_by_dataset']
+    seeds = config.setting_config['seeds']
+    test_seeds = config.setting_config['test_seeds']
 
     # Extract hyperparameters
-    trainer_params = config.trainer_params
-    optimizer_params = config.optimizer_params
-    nn_params = config.nn_params
+    trainer_params = config.hyperparams_config['trainer_params']
+    optimizer_params = config.hyperparams_config['optimizer_params']
+    nn_params = config.hyperparams_config['nn_params']
 
     feature_registry = None
     # Initialize range manager if this is a hybrid problem
@@ -213,35 +229,47 @@ def run_training(setting_config, hyperparams_config):
     # Create loss function
     loss_function = PolicyLoss()
 
-    # Run training
-    train_metrics = trainer.train(
-        trainer_params['epochs'], 
-        loss_function, 
-        simulator, 
-        model, 
-        data_loaders, 
-        optimizer_wrapper,
-        problem_params, 
-        observation_params, 
-        params_by_dataset, 
-        trainer_params,
-        config
-    )
+    train_metrics = None
+    test_metrics = None
+    
+    # Run training if requested
+    if mode in ['train', 'both']:
+        print('Starting training...')
+        train_metrics, dev_metrics = trainer.train(
+            trainer_params['epochs'], 
+            loss_function, 
+            simulator, 
+            model, 
+            data_loaders, 
+            optimizer_wrapper,
+            problem_params, 
+            observation_params, 
+            params_by_dataset, 
+            trainer_params,
+            config
+        )
 
-    # Run test
-    test_metrics = trainer.test(
-        loss_function, 
-        simulator, 
-        model, 
-        data_loaders, 
-        optimizer, 
-        problem_params, 
-        observation_params, 
-        params_by_dataset, 
-        discrete_allocation=store_params['demand']['distribution'] == 'poisson'
-    )
+    # Run test if requested
+    if mode in ['test', 'both']:
+        print('Starting testing...')
+        test_metrics, _ = trainer.test(
+            loss_function, 
+            simulator, 
+            model, 
+            data_loaders, 
+            optimizer_wrapper, 
+            problem_params, 
+            observation_params, 
+            params_by_dataset, 
+            discrete_allocation=store_params['demand']['distribution'] == 'poisson' and False
+        )
+        print(f'Test metrics: {test_metrics}')
 
-    return train_metrics, test_metrics
+    # Always close logger if it exists
+    if trainer.logger is not None:
+        trainer.logger.close()
+    
+    return train_metrics, dev_metrics, test_metrics
 
 if __name__ == "__main__":
     # Check if command-line arguments are provided
@@ -256,7 +284,10 @@ if __name__ == "__main__":
         print(f'Number of parameters should be either 4 or 2')
         assert False
 
-    train_or_test = sys.argv[1]
+    mode = sys.argv[1]
+    if mode not in ['train', 'test', 'both']:
+        print(f'Invalid mode: {mode}. Must be one of: train, test, both')
+        assert False
 
     print(f'Setting file name: {setting_name}')
     print(f'Hyperparams file name: {hyperparams_name}\n')
@@ -271,13 +302,10 @@ if __name__ == "__main__":
     with open(config_hyperparams_file, 'r') as file:
         hyperparams_config = yaml.safe_load(file)
 
-    # Run training/testing based on command line argument
-    if train_or_test == 'train':
-        train_metrics, test_metrics = run_training(setting_config, hyperparams_config)
-    elif train_or_test == 'test':
-        _, test_metrics = run_training(setting_config, hyperparams_config)
+    # Run training/testing with specified mode
+    train_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode=mode)
+    
+    # Print test metrics if they exist
+    if test_metrics is not None:
         print(f'Average per-period test loss: {test_metrics["loss/reported"]}')
-    else:
-        print(f'Invalid argument: {train_or_test}')
-        assert False
 
