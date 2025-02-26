@@ -135,13 +135,23 @@ class HybridSimulator(Simulator):
         # print(f'allocation: {allocation[0, 0]}')
         
         # 6. Update inventories using same pattern as base simulator
-        lead_time = self.problem_params.get('lead_time', 1)
+        lead_time = int(observation['lead_times'][0, 0].item())
+        # raise an error if observation['lead_times'] contains more than one differentvalue
+        if observation['lead_times'].unique().numel() > 1:
+            raise ValueError('observation["lead_times"] contains more than one different value')
+        # lead_time = self.store_params['lead_time']['value']
+        # print(f'inventory: {observation["store_inventories"][0]}')
+        # print(f'post_inventory_on_hand: {post_inventory_on_hand[0]}')
+        # print(f'allocation: {allocation[0]}')
+        # print(f'lead_time: {lead_time}')
         observation['store_inventories'] = self._update_inventories_in_place(
             inventory,
             post_inventory_on_hand,
             allocation,
             lead_time
         )
+        # print(f'observation["store_inventories"]: {observation["store_inventories"][0]}')
+        # print()
 
         # print(f'observation["store_inventories"]: {observation["store_inventories"][0, 0]}')
         # Update current period

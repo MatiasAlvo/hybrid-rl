@@ -65,14 +65,16 @@ class FeatureRegistry:
         continuous_values = None
         if 'continuous' in raw_outputs:
             # First get [0,1] values
-            continuous_values = self.range_manager.get_continuous_values(
+            continuous_values = self.range_manager.get_scaled_continuous_values(
                 raw_outputs['continuous']
             )
+            # print(f'continuous_values after get_scaled_continuous_values: {continuous_values[0]}')
             # Then scale to actual ranges
             continuous_values = self.range_manager.scale_continuous_by_ranges(
                 continuous_values,
                 self.range_manager.get_continuous_ranges()
             )
+            # print(f'continuous_values in feature_registry: {continuous_values[0]}')
         # Combine discrete and continuous actions into feature-specific actions
         feature_actions = self.range_manager.compute_feature_actions(
             discrete_probs, 

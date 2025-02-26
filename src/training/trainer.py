@@ -11,6 +11,8 @@ import copy
 import datetime
 import matplotlib.pyplot as plt
 from src.utils.logger import Logger
+import yaml
+import pandas as pd
 
 
 class Trainer():
@@ -132,11 +134,10 @@ class Trainer():
             self.logger.flush_metrics()
         return train_metrics, dev_metrics
 
-    def test(self, loss_function, simulator, model, data_loaders, optimizer, problem_params, observation_params, params_by_dataset, discrete_allocation=False):
+    def test(self, loss_function, simulator, model, data_loaders, optimizer, problem_params, observation_params, params_by_dataset, trainer_params, discrete_allocation=False):
         """Test the model using the best parameters found during training"""
         if model.trainable:
             if self.best_performance_data['model_params_to_save'] is not None:
-                # Load the parameter weights that gave the best performance
                 try:
                     model.load_state_dict(self.best_performance_data['model_params_to_save'])
                     print(f"Loaded best model with dev loss: {self.best_performance_data['dev_loss']:.4f}")
@@ -149,7 +150,7 @@ class Trainer():
         # Put model in eval mode
         model.eval()
 
-        test_metrics = self.do_one_epoch(
+        test_metrics, trajectory_data = self.do_one_epoch(
                 optimizer, 
                 data_loaders['test'], 
                 loss_function, 
@@ -158,9 +159,10 @@ class Trainer():
                 params_by_dataset['test']['periods'], 
                 problem_params, 
                 observation_params, 
-                train=False,  # Changed to False since we're testing
+                train=False,
                 ignore_periods=params_by_dataset['test']['ignore_periods'],
-                discrete_allocation=discrete_allocation
+                discrete_allocation=discrete_allocation,
+                return_trajectory=True
                 )
         
         # Log only if logger exists
@@ -172,15 +174,27 @@ class Trainer():
             self.logger.log_metrics(scalar_metrics, prefix='test')
             self.logger.flush_metrics()
         
+        # Compute additional metrics if specified
+        if trainer_params.get('compute_metrics_on_test', False):
+            self.compute_and_save_test_metrics(
+                trajectory_data,
+                model_name=trainer_params['save_model_filename'],
+                folders=trainer_params['save_model_folders'],
+                simulator=simulator
+            )
+        
         # Put model back in train mode
         model.train()
         
-        return test_metrics, None
+        return test_metrics, trajectory_data
 
-    def do_one_epoch(self, optimizer_wrapper, data_loader, loss_function, simulator, model, periods, problem_params, observation_params, train=True, ignore_periods=0, discrete_allocation=False):
+    def do_one_epoch(self, optimizer_wrapper, data_loader, loss_function, simulator, model, periods, problem_params, observation_params, train=True, ignore_periods=0, discrete_allocation=False, return_trajectory=False):
         """
         Do one epoch of training or testing
         """
+
+        # print(f'observation_params["normalize_observations"]: {observation_params["normalize_observations"]}')
+        # print(f'simulator.normalize_observations: {simulator.normalize_observations}')
         
         epoch_loss = 0
         epoch_loss_to_report = 0
@@ -189,6 +203,7 @@ class Trainer():
         
         optimizer_metrics_sum = None
         num_batches = 0
+        special_metrics = {}  # New dictionary for metrics that shouldn't be averaged
 
         for i, data_batch in enumerate(data_loader):
             data_batch = self.move_batch_to_device(data_batch)
@@ -206,11 +221,18 @@ class Trainer():
             if train and model.trainable:
                 batch_metrics = optimizer_wrapper.optimize(trajectory_data)
                 
+                # Handle special metrics (like gradients) that shouldn't be averaged
+                for k, v in batch_metrics.items():
+                    if 'grad_analysis' in k:
+                        special_metrics[k] = v  # Store without averaging
+                        continue
+                        
                 if optimizer_metrics_sum is None:
-                    optimizer_metrics_sum = {k: v for k, v in batch_metrics.items()}
+                    optimizer_metrics_sum = {k: v for k, v in batch_metrics.items() if 'grad_analysis' not in k}
                 else:
                     for k, v in batch_metrics.items():
-                        optimizer_metrics_sum[k] += v
+                        if 'grad_analysis' not in k:
+                            optimizer_metrics_sum[k] += v
                 num_batches += 1
 
         # Calculate average metrics using simulator results
@@ -219,13 +241,18 @@ class Trainer():
             'loss/reported': epoch_loss_to_report/(total_samples*periods_tracking_loss*problem_params['n_stores'])
         }
         
-        # Add optimizer metrics if available
+        # Add averaged optimizer metrics
         if optimizer_metrics_sum is not None:
             for k, v in optimizer_metrics_sum.items():
-                if k not in ['loss/total', 'loss/reported']:  # Don't overwrite simulator metrics
-                    metrics[k] = v / num_batches
+                metrics[k] = v / num_batches
+                
+        # Add special metrics without averaging
+        metrics.update(special_metrics)
 
-        return metrics
+        if return_trajectory:
+            return metrics, trajectory_data
+        else:
+            return metrics
     
     def simulate_batch(self, loss_function, simulator, model, periods, problem_params, data_batch, observation_params, ignore_periods=0, discrete_allocation=False, collect_trajectories=False):
         """
@@ -252,11 +279,12 @@ class Trainer():
         trajectory_data = None
         if collect_trajectories:
             trajectory_data = {
-                'observations': [],
-                'rewards': [],
-                'actions': [],
-                'logits': [],
-                'values': [],
+                'observations': [], # observations at each time step
+                'rewards': [], # rewards at each time step
+                'actions': [], # one action per sub-range
+                'total_actions': [], # total one-dimensional action
+                'logits': [], # logits per sub-range
+                'values': [], # value of the state
                 'terminated': []
             }
 
@@ -290,12 +318,13 @@ class Trainer():
             # Store trajectory data with proper detaching and cloning
             if collect_trajectories:
                 if vectorized_obs is not None:
-                    trajectory_data['observations'].append(vectorized_obs.detach().clone())
+                    trajectory_data['observations'].append(vectorized_obs.clone())
                 trajectory_data['actions'].append(action_dict['discrete_actions'].detach().clone())
+                trajectory_data['total_actions'].append(action_dict['feature_actions']['total_action'].detach().clone())
                 trajectory_data['logits'].append(action_dict['action_logits'].detach().clone())
                 if value is not None:
                     trajectory_data['values'].append(value.detach().clone())
-                trajectory_data['rewards'].append(reward.detach().clone())
+                trajectory_data['rewards'].append(reward.clone())
                 trajectory_data['terminated'].append(torch.tensor(terminated).detach().clone())
 
             #     # print [-1][0] of every list in trajectory_data
@@ -333,7 +362,7 @@ class Trainer():
 
         return batch_reward, reward_to_report, trajectory_data
 
-    def save_model(self, epoch, model, optimizer_wrapper, trainer_params):
+    def save_model(self, epoch, model, optimizer, trainer_params):
         path = self.create_many_folders_if_not_exist_and_return_path(
             base_dir=trainer_params['base_dir'], 
             intermediate_folder_strings=trainer_params['save_model_folders']
@@ -342,7 +371,7 @@ class Trainer():
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer_wrapper.optimizer.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
             'best_train_loss': self.best_performance_data['train_loss'],
             'best_dev_loss': self.best_performance_data['dev_loss'],
             'all_train_losses': self.all_train_losses,
@@ -500,4 +529,66 @@ class Trainer():
             'actions_per_feature': agent_outputs['actions_per_feature'],
             'simulator_info': simulator_info
         }
+
+    def compute_and_save_test_metrics(self, trajectory_data, model_name, folders, simulator, n_samples=100):
+        """
+        Compute and save specific metrics for a random subset of test trajectories
+        """
+        # Create metrics directory
+        base_dir = 'metrics/test_trajectories'
+        path = self.create_many_folders_if_not_exist_and_return_path(
+            base_dir=base_dir,
+            intermediate_folder_strings=folders
+        )
+        
+        # Get shapes: [T, B, F] for observations, [T, B, 1] for actions
+        T, B, _ = trajectory_data["observations"].shape
+        
+        # Select random batch indices first
+        random_batch_indices = torch.randperm(B)[:n_samples]
+        
+        # Select the samples for each tensor
+        selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
+        selected_actions = trajectory_data["actions"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+        selected_total_actions = trajectory_data["total_actions"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+        
+        # if we are normalizing the inventory, we need to unnormalize selected_inventories
+        if simulator.normalize_observations:
+            selected_inventories = selected_inventories * simulator.inventory_std + simulator.inventory_mean
+        
+        # Now reshape the selected samples
+        selected_inventories = selected_inventories.reshape(-1, selected_inventories.shape[-1])  # Shape: [T*n_samples, F]
+        selected_actions = selected_actions.reshape(-1, selected_actions.shape[-1])  # Shape: [T*n_samples, 1]
+        selected_total_actions = selected_total_actions.reshape(-1, selected_total_actions.shape[-1])  # Shape: [T*n_samples, 1]
+
+        # # print the first 10 rows of the selected_inventories
+        # print(f'selected_inventories shape: {selected_inventories.shape}')
+        # print(f'selected_inventories: {selected_inventories[:10]}')
+        
+        # Sum across features for inventories
+        inventory_sums = selected_inventories.sum(dim=1)  # Shape: [T*n_samples]
+        action_sums = selected_actions.sum(dim=1)  # Shape: [T*n_samples]
+        total_action_sums = selected_total_actions.sum(dim=1)  # Shape: [T*n_samples]
+
+        
+        # Create DataFrame
+        all_data = []
+        for idx in range(len(inventory_sums)):
+            all_data.append({
+                'time_step': idx // n_samples,
+                'batch_idx': random_batch_indices[idx % n_samples].item(),
+                'idx': idx,
+                'inventory_sum': inventory_sums[idx].item(),
+                'inventory_on_hand': selected_inventories[idx][0].item(),
+                'action': selected_actions[idx].item(),
+                'action_sum': action_sums[idx].item(),
+                'total_action_sum': total_action_sums[idx].item()
+            })
+        
+        df = pd.DataFrame(all_data)
+        
+        # Save as CSV
+        csv_path = f"{path}/{model_name}_test_metrics.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"Saved test metrics to {csv_path}")
 

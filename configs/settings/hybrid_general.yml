@@ -25,16 +25,20 @@ sample_data_params:
   'test_periods': null
 
 problem_params: 
+  'setting_name': "one_store_fixed_costs"
   'n_stores': 1
   'n_warehouses': 0
   'n_extra_echelons': 0
-  'lost_demand': true
+  'lost_demand': false
   'maximize_profit': false
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
-      'thresholds': [-0.0001, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]  # first and last values are the same across all discrete features
-      'values': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ]
+      'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
+      'values': [0.0, 64.0]
+      # 'thresholds': [-0.0001, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]  # first and last values are the same across all discrete features
+      # 'values': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ]
+      
       # 'thresholds': [0, 0.01, 7.0]  # first and last values are the same across all discrete features
       # 'values': [0.0, 20.0]
       # 'thresholds': [0, 4, 8, 12]  # first and last values are the same across all discrete features
@@ -68,7 +72,8 @@ observation_params:
 store_params: 
   'demand': 
     'distribution': 'poisson'
-    'mean': 5.0
+    'mean': 10.0
+    # 'mean': 5.0
     'sample_across_stores': False
     'expand': False
     'clip': False

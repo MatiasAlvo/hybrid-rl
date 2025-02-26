@@ -78,16 +78,23 @@ class TrainingWorker:
             logging.error(f"Error in sweep on GPU {self.gpu_id}: {str(e)}")
             raise
 
-def train_sweep(config=None):
-    """Training function for sweep"""
+def train_sweep(sweep_config):
+    """Run a single sweep trial"""
     try:
-        with wandb.init(project="inventory_control") as run:
-            sweep_config = run.config
-            
-            # Load the full configs
-            with open(sweep_config['config_files']['setting'], 'r') as file:
+        # Initialize wandb first
+        run = wandb.init(
+            project="inventory_control",
+            config=sweep_config
+        )
+        
+        # Get config_files directly from run.config
+        config_files = run.config['config_files']
+        
+        try:
+            # Load the full configs from the files
+            with open(config_files['setting'], 'r') as file:
                 setting_config = yaml.safe_load(file)
-            with open(sweep_config['config_files']['hyperparams'], 'r') as file:
+            with open(config_files['hyperparams'], 'r') as file:
                 hyperparams_config = yaml.safe_load(file)
 
             # Define parameter mappings with their config destinations
@@ -106,10 +113,13 @@ def train_sweep(config=None):
                 'normalize_observations': ('setting', ['observation_params', 'normalize_observations']),
                 'reward_scaling': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling']),
                 'buffer_periods': ('hyperparams', ['optimizer_params', 'ppo_params', 'buffer_periods']),
+                'pathwise_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'pathwise_coef']),
+                'reward_scaling_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling_pathwise']),
+                'max_grad_norm': ('hyperparams', ['optimizer_params', 'ppo_params', 'max_grad_norm']),
             }
             
-            # Update configs based on sweep parameters
-            for param_name, param_value in sweep_config.items():
+            # Update configs based on sweep parameters from run.config
+            for param_name, param_value in run.config.items():
                 if param_name in param_mappings:
                     config_type, param_path = param_mappings[param_name]
                     target_config = hyperparams_config if config_type == 'hyperparams' else setting_config
@@ -121,29 +131,31 @@ def train_sweep(config=None):
                             current_dict[key] = {}
                         current_dict = current_dict[key]
                     current_dict[param_path[-1]] = param_value
-            
-            # Special handling for train_periods (affects multiple datasets)
-            if 'train_periods' in sweep_config:
-                for dataset in ['train', 'dev', 'test']:
-                    setting_config['params_by_dataset'][dataset]['periods'] = sweep_config['train_periods']
 
-            # Log all parameters explicitly
-            wandb.log({
-                "full_setting_config": setting_config,
-                "full_hyperparams_config": hyperparams_config,
-            }, commit=False)
+            # Add relevant problem parameters as tags
+            problem_params = setting_config.get('problem_params', {})
+            wandb.config.tags = [
+                f"stores_{problem_params.get('n_stores', 0)}",
+                f"warehouses_{problem_params.get('n_warehouses', 0)}",
+                f"echelons_{problem_params.get('n_extra_echelons', 0)}",
+                'hybrid' if problem_params.get('is_hybrid', False) else 'single',
+                'profit' if problem_params.get('maximize_profit', False) else 'cost',
+                'lost_demand' if problem_params.get('lost_demand', False) else 'backorder'
+            ]
 
-            # Let CUDA_VISIBLE_DEVICES handle the GPU mapping
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            hyperparams_config['device'] = device
-            
-            print("Starting sweep training and testing...")
+            # Run training
             train_metrics, dev_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode='both')
-
+            
+        except Exception as e:
+            print(f"Sweep run failed with error: {str(e)}")
+            logging.error(f"Sweep run failed with error: {str(e)}", exc_info=True)
+            raise
+        finally:
+            wandb.finish()
             
     except Exception as e:
-        print(f"Sweep run failed with error: {str(e)}")
-        logging.error(f"Sweep run failed with error: {str(e)}", exc_info=True)
+        print(f"Failed to initialize wandb: {str(e)}")
+        logging.error(f"Failed to initialize wandb: {str(e)}", exc_info=True)
         raise
 
 def flatten_dict(d, parent_key='', sep='.'):
@@ -179,57 +191,81 @@ def create_sweep_config(config_files):
             # Original parameters
             'learning_rate': {
                 'distribution': 'log_uniform_values',
-                'min': 1e-5,
+                'min': 1e-4,
                 'max': 1e-3
             },
             'anneal_lr': {
-                # 'values': [False]
-                'values': [True, False]
+                'values': [True]
+                # 'values': [True, False]
             },
             'num_epochs': {
-                'values': [5, 10]
+                # 'values': [1]
+                'values': [5]
             },
             'value_function_coef': {
                 'distribution': 'log_uniform_values',
-                'min': 0.01,
-                'max': 1.0
+                'min': 0.1,
+                'max': 0.2
             },
             'gamma': {
                 'distribution': 'uniform',
-                'min': 0.9,
-                'max': 0.99
+                'min': 0.92,
+                'max': 0.95
             },
             'gae_lambda': {
                 'distribution': 'uniform',
-                'min': 0.9,
-                'max': 0.99
+                'min': 0.95,
+                'max': 0.97
             },
             'clip_coef': {
                 'distribution': 'uniform',
                 'min': 0.1,
-                'max': 0.3
+                'max': 0.2
             },
             # New parameters
             'policy_activation': {
-                'values': ['Tanh', 'ReLU', 'ELU']
+                'values': ['ELU']
+                # 'values': ['ELU']
+                # 'values': ['Tanh', 'ReLU', 'ELU']
             },
             'value_activation': {
-                'values': ['Tanh', 'ReLU', 'ELU']
+                'values': ['ELU']
+                # 'values': ['ELU']
+                # 'values': ['Tanh', 'ReLU', 'ELU']
             },
             'normalize_advantages': {
-                'values': [False, True]
+                'values': [True]
+                # 'values': [False, True]
             },
             'use_gae': {
-                'values': [True, False]
+                'values': [True]
+                # 'values': [True, False]
             },
             'normalize_observations': {
-                'values': [False, True]
+                # 'values': [False, True]
+                'values': [False]
             },
             'reward_scaling': {
-                'values': [False, True]
+                'values': [True]
+                # 'values': [False, True]
             },
             'buffer_periods': {
-                'values': [0, 20, 50]  # Adjust range as needed
+                'values': [50]  # Adjust range as needed
+                # 'values': [0, 20, 50]  # Adjust range as needed
+            },
+            'pathwise_coef': {
+                'distribution': 'uniform',
+                'min': 8.0,
+                'max': 10.0
+            },
+            'reward_scaling_pathwise': {
+                'values': [True]
+                # 'values': [True, False]
+            },
+            'max_grad_norm': {
+                'distribution': 'uniform',
+                'min': 5.0,
+                'max': 10.0
             },
             # Store complete original configs
             'setting_config': {

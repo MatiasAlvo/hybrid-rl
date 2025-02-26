@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from src.algorithms.common.agents.base_agent import BaseAgent
-from src.algorithms.common.policies.policy import HybridPolicy
+from src.algorithms.common.policies.policy import HybridPolicy, NeuralNetworkCreator
 from src.algorithms.common.values.value_network import ValueNetwork
 
 class HybridAgent(BaseAgent):
@@ -21,7 +21,7 @@ class HybridAgent(BaseAgent):
         policy_params['policy_network']['heads']['discrete']['size'] = network_dims['n_discrete']
         policy_params['policy_network']['heads']['continuous']['size'] = network_dims['n_continuous']
         
-        return HybridPolicy(policy_params, device=self.device)
+        return NeuralNetworkCreator().get_architecture(policy_params['policy_network']['name'])(policy_params, device=self.device)
     
     def parameters(self):
         """Return parameters for optimization"""
@@ -44,7 +44,6 @@ class HybridAgent(BaseAgent):
         # print(f'raw_outputs: {raw_outputs["discrete"][0]}')
         # Process network output
         action_dict = self.feature_registry.process_network_output(raw_outputs, argmax=False, sample=True)
-        # print(f'discrete_probs: {action_dict["discrete_probs"][0]}')
         # print(f'average discrete_probs: {action_dict["discrete_probs"].mean(dim=0)}')
         # Get value if value network exists
         value = self.value_net(observation) if self.value_net is not None else None
@@ -60,7 +59,11 @@ class HybridAgent(BaseAgent):
         # difference = base_stock_level - total_inventory
         # total_action = torch.clip(difference, max=6)
         # action_dict['feature_actions']['total_action'] = total_action
-        # print(f'total_action: {total_action[0]}')
+        # print(f'discrete_probs: {action_dict["discrete_probs"][0]}')
+        # print(f'total_action: {action_dict["feature_actions"]["total_action"][0]}')
+        # print sum of inventory
+        # print(f'sum of inventory: {observation["store_inventories"].sum(dim=2)[0]}')
+        # print()
         return {
             'action_dict': action_dict,
             'value': value,
@@ -83,7 +86,7 @@ class HybridAgent(BaseAgent):
         # Gather logits for the specific actions that were taken
         logits = raw_outputs['discrete'].gather(-1, actions).squeeze(-1)
         
-        value = self.value_net(processed_observation, process_state=False) if self.value_net else None
+        value = self.value_net(processed_observation.detach(), process_state=False) if self.value_net else None
         entropy = self.get_entropy(raw_outputs['discrete'])
         
         return logits, value, entropy
@@ -144,3 +147,13 @@ class HybridAgent(BaseAgent):
         value_net.observation_keys = value_params.get('observation_keys', ['store_inventories'])
         
         return value_net
+
+    def load_state_dict(self, state_dict, strict=True):
+        """Override load_state_dict to remove initialization hooks before loading"""
+        # Remove hooks from policy network before loading
+        if hasattr(self.policy, 'remove_lazy_init_hooks'):
+            print("Removing lazy initialization hooks from policy")
+            self.policy.remove_lazy_init_hooks()
+        
+        # Load state dict
+        return super().load_state_dict(state_dict, strict)

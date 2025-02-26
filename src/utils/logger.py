@@ -31,20 +31,21 @@ class Logger:
         # Create run name from timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Extract setting name from config
-        setting_name = config.setting_config.get('setting_name', 'default')
+        # Extract setting name and problem parameters
+        setting_name = logging_params.get('setting_name', 'default')
+        problem_params = config.setting_config.get('problem_params', {})
         
-        # Set up run name first
+        # Set up run name
         exp_name = logging_params.get('exp_name', 'default')
         env_name = logging_params.get('env_name', 'default')
         self.run_name = f"{env_name}__{exp_name}__{timestamp}"
         
-        # Set up logging directory only if needed
+        # Set up logging directory only if tensorboard is enabled
         if self.use_tensorboard:
             self.log_dir = self._setup_log_dir(config)
-            
             # Initialize tensorboard
             self.writer = SummaryWriter(self.log_dir)
+            print(f"Logging to TensorBoard at: {self.log_dir}")
         
         # Initialize W&B if enabled
         if self.use_wandb and wandb.run is None:
@@ -53,8 +54,20 @@ class Logger:
                     project="inventory_control",
                     config=config.get_complete_config(),
                     name=f"inventory__{setting_name}__{timestamp}",
+                    group=setting_name,  # Use setting_name for grouping
                     settings=wandb.Settings(start_method="thread")
                 )
+                
+                # Add relevant problem parameters as tags
+                wandb.run.tags = [
+                    f"stores_{problem_params.get('n_stores', 0)}",
+                    f"warehouses_{problem_params.get('n_warehouses', 0)}",
+                    f"echelons_{problem_params.get('n_extra_echelons', 0)}",
+                    'hybrid' if problem_params.get('is_hybrid', False) else 'single',
+                    'profit' if problem_params.get('maximize_profit', False) else 'cost',
+                    'lost_demand' if problem_params.get('lost_demand', False) else 'backorder'
+                ]
+                
                 print("Successfully initialized or connected to wandb")
             except Exception as e:
                 print(f"Warning: Could not initialize wandb: {e}")
@@ -64,8 +77,6 @@ class Logger:
         # Log hyperparameters only if logging is enabled
         if self.use_wandb or self.use_tensorboard:
             self._log_hyperparameters(config)
-        
-        print(f"Logging to: {self.log_dir}")  # Print the log directory for verification
         
         self.step_counter = 0  # Add a step counter
         if self.use_wandb:
@@ -91,7 +102,7 @@ class Logger:
 
     def _log_hyperparameters(self, config: Dict[str, Any]):
         """
-        Log hyperparameters in an organized way to TensorBoard
+        Log hyperparameters in an organized way to TensorBoard and save config file
         """
         # Define parameter groups
         param_groups = OrderedDict({
@@ -128,7 +139,7 @@ class Logger:
                     return None
             return value
 
-        # Build markdown text for TensorBoard
+        # Build markdown text
         markdown_text = "# Hyperparameters\n\n"
         
         for group_name, params in param_groups.items():
@@ -142,24 +153,25 @@ class Logger:
             
             markdown_text += "\n"
 
-        # Add any custom discrete features if present
+        # Add discrete features section if present
         if 'discrete_features' in config.setting_config.get('problem_params', {}):
             markdown_text += "## Discrete Features\n"
             markdown_text += "|Feature|Thresholds|Values|\n|-|-|-|\n"
             
             for feature, data in config.setting_config.get('problem_params', {}).get('discrete_features', {}).items():
-                if isinstance(data, dict):  # Skip if None
+                if isinstance(data, dict):
                     thresholds = data.get('thresholds', [])
                     values = data.get('values', [])
                     markdown_text += f"|{feature}|{thresholds}|{values}|\n"
 
-        # Log to TensorBoard
-        self.writer.add_text("hyperparameters", markdown_text)
-
-        # Save full config as YAML for reference
-        config_path = os.path.join(self.log_dir, 'full_config.yaml')
-        with open(config_path, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False)
+        # Log to TensorBoard only if enabled
+        if self.use_tensorboard:
+            self.writer.add_text("hyperparameters", markdown_text)
+            
+            # Save full config as YAML for reference
+            config_path = os.path.join(self.log_dir, 'full_config.yaml')
+            with open(config_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
     
     def watch_model(self):
         """
@@ -204,24 +216,33 @@ class Logger:
             return
             
         for name, param in model.named_parameters():
-            # Log parameter values to tensorboard
             if param.data is not None:
-                self.writer.add_histogram(f"weights/{name}", param.data, step)
+                # Calculate statistics
+                stats = {
+                    f"weights_stats/{name}_mean": param.data.mean().item(),
+                    f"weights_stats/{name}_std": param.data.std(unbiased=False).item(),
+                    f"weights_stats/{name}_norm": param.data.norm().item()
+                }
+                self.current_metrics.update(stats)
                 
-                # Store statistics in current_metrics, using unbiased=False for std
-                self.current_metrics[f"weights_stats/{name}_mean"] = param.data.mean().item()
-                self.current_metrics[f"weights_stats/{name}_std"] = param.data.std(unbiased=False).item()
-                self.current_metrics[f"weights_stats/{name}_norm"] = param.data.norm().item()
+                # Log histograms only if tensorboard is enabled
+                if self.use_tensorboard:
+                    self.writer.add_histogram(f"weights/{name}", param.data, step)
             
-            # Log gradients if they exist
+            # Handle gradients if they exist
             if param.grad is not None:
-                self.writer.add_histogram(f"grads/{name}", param.grad, step)
+                # Calculate gradient statistics
+                grad_stats = {
+                    f"grads_stats/{name}_mean": param.grad.mean().item(),
+                    f"grads_stats/{name}_std": param.grad.std(unbiased=False).item(),
+                    f"grads_stats/{name}_norm": param.grad.norm().item()
+                }
+                self.current_metrics.update(grad_stats)
                 
-                # Store gradient statistics in current_metrics, using unbiased=False for std
-                self.current_metrics[f"grads_stats/{name}_mean"] = param.grad.mean().item()
-                self.current_metrics[f"grads_stats/{name}_std"] = param.grad.std(unbiased=False).item()
-                self.current_metrics[f"grads_stats/{name}_norm"] = param.grad.norm().item()
-    
+                # Log gradient histograms only if tensorboard is enabled
+                if self.use_tensorboard:
+                    self.writer.add_histogram(f"grads/{name}", param.grad, step)
+
     def log_action_distribution(self, actions: torch.Tensor, step: int):
         """Log histogram of discrete actions"""
         if actions is not None:

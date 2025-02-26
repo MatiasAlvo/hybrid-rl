@@ -1,42 +1,46 @@
 trainer_params:
-  'epochs': 200
+  'epochs': 100
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
   'epochs_between_save': 1
   'choose_best_model_on': 'dev_loss'
   'load_previous_model': false
-  'load_model_path': 'models/saved_models/your_model.pt'
-  'save_model_folders': ['hybrid_general']
-  'save_model_filename': 'model'
+  'load_model_path': 'models/saved_models/2025_02_14/one_store_fixed_costs/hybrid_policy_ss/1739538467.pt'
+  # 'load_model_path': 'models/saved_models/your_model.pt'
+  'base_dir': 'models/saved_models'
+  'compute_metrics_on_test': true
 
 logging_params:
   'use_wandb': true
-  'use_tensorboard': true
+  'use_tensorboard': false
   'wandb_project_name': "inventory_control"
   'wandb_entity': "alvomatias"
   'exp_name': "hybrid_general"
   'env_name': "inventory"
+  'setting_name': "one_store_fixed_costs"
 
 optimizer_params:
-  'learning_rate': 0.00001
+  'learning_rate': 0.0001
   'anneal_lr': true
   'weight_decay': 0.0
   'gradient_clip': 1.0
   'ppo_params':
     'clip_coef': 0.2
-    'num_epochs': 10
+    'num_epochs': 2
     'num_minibatches': 4
     'target_kl': 0.015
     'normalize_advantages': false
-    'reward_scaling': false
+    'reward_scaling': true
+    'reward_scaling_pathwise': true
     'clip_value_loss': false
     'entropy_coef': 0.01
     'value_function_coef': 0.5
+    'pathwise_coef': 0.5
     'max_grad_norm': 0.5
     'gamma': 0.95
     'gae_lambda': 0.99
-    'use_gae': false
+    'use_gae': true
     'buffer_periods': 0
 
 nn_params:

@@ -602,11 +602,12 @@ class PolicyNetwork(nn.Module):
         super().__init__()
         self.device = device
         policy_config = config['policy_network']
+        self.trainable = True
         
         # Network architecture parameters
         self.input_size = policy_config['input_size']
         self.hidden_layers = policy_config['hidden_layers']
-        self.activation = policy_config['activation']  # Capitalize activation name
+        self.activation = policy_config['activation']
         self.dropout_rate = policy_config.get('dropout', 0.0)
         self.use_batch_norm = policy_config.get('batch_norm', False)
         
@@ -623,6 +624,17 @@ class PolicyNetwork(nn.Module):
         
         layer.register_forward_pre_hook(init_hook)
         return layer
+    
+    def remove_lazy_init_hooks(self):
+        """Remove all initialization hooks from the model"""
+        for module in self.modules():
+            # Remove all forward pre-hooks (which are our initialization hooks)
+            module._forward_pre_hooks.clear()
+    
+    def load_state_dict(self, state_dict, strict=True):
+        """Override load_state_dict to remove initialization hooks before loading"""
+        self.remove_lazy_init_hooks()
+        return super().load_state_dict(state_dict, strict)
     
     def layer_init(self, layer, std=2**0.5, bias_const=0.0):
         torch.nn.init.orthogonal_(layer.weight, std)
@@ -673,6 +685,7 @@ class HybridPolicy(PolicyNetwork):
     def __init__(self, config, device='cpu'):
         super().__init__(config, device)
         
+        
         # Get output dimensions from config
         self.heads = config['policy_network']['heads']
         last_hidden = self.hidden_layers[-1]
@@ -691,31 +704,109 @@ class HybridPolicy(PolicyNetwork):
             )
         self.to(self.device)
     def forward(self, x, process_state=True):
+        current_period = 0
+        if process_state:
+            current_period = x['current_period']
+            x = x['store_inventories']
+            x = x.flatten(start_dim=1)
 
-        # If process_state is True, then we process the state to get the features (otherwise, we already collected trajectory, and state is in correct format)
+        # Get base features
+        base_features = self.get_features(x).unsqueeze(1)
+        
+        # Create separate feature paths for each head
+        # discrete_features = base_features.unsqueeze(1)
+        # continuous_features = base_features.unsqueeze(1)
+        # discrete_features = base_features.unsqueeze(1).clone()
+        # continuous_features = base_features.unsqueeze(1).clone()
+        
+        # outputs = {}
+        # if 'discrete' in self.heads_layers:
+        #     outputs['discrete'] = self.heads_layers['discrete'](discrete_features)
+        # if 'continuous' in self.heads_layers:
+        #     outputs['continuous'] = self.heads_layers['continuous'](continuous_features)
+
+        outputs = {}
+        if 'continuous' in self.heads_layers:
+            # continuous_features = base_features.unsqueeze(1)  # No clone for graph preservation
+            if True:
+            # if current_period == 107:
+                # print(current_period)
+                outputs['continuous'] = self.heads_layers['continuous'](base_features)
+                # print(f'shape of outputs["continuous"]: {outputs["continuous"].shape}')
+            elif process_state:
+                outputs['continuous'] = torch.zeros([128, 1, 2]).to(self.device)
+            else:
+                outputs['continuous'] = torch.zeros([2560, 1, 2]).to(self.device)
+        if 'discrete' in self.heads_layers:
+            # discrete_features = base_features.unsqueeze(1)  # No clone for graph preservation
+            # outputs['discrete'] = outputs['continuous']
+            outputs['discrete'] = self.heads_layers['discrete'](base_features)
+            
+        return outputs
+
+    def forward_backup(self, x, process_state=True):
+        # If process_state is True, then we process the state to get the features 
         if process_state:
             x = x['store_inventories']
-
             # Flatten input, except for the batch dimension
             x = x.flatten(start_dim=1)
-            
 
-        """Forward pass returning both discrete and continuous outputs"""
+        # Get features and add store dimension
         features = self.get_features(x)
-
-        # add store dimension
-        features = features.unsqueeze(1)
+        # Create new tensor explicitly
+        features = features.clone().unsqueeze(1)
    
         outputs = {}
         if 'discrete' in self.heads_layers:
-            outputs['discrete'] = self.heads_layers['discrete'](features)
-            # for debugging, make this constant and equal to 10
-            # outputs['discrete'] = torch.ones_like(outputs['discrete']) * 10
+            outputs['discrete'] = self.heads_layers['discrete'](features.clone())
         if 'continuous' in self.heads_layers:
-            # for test, make this constant and equal to 10
-            outputs['continuous'] = torch.ones_like(outputs['discrete']) * torch.inf
-            # outputs['continuous'] = self.heads_layers['continuous'](features)
+            # Create new tensor for continuous head
+            continuous_features = features.clone()
+            outputs['continuous'] = self.heads_layers['continuous'](continuous_features)
             
+        return outputs
+
+class HybridPolicySS(HybridPolicy):
+    """Policy network for hybrid discrete/continuous actions with a fixed S=62 continuous policy"""
+    def forward(self, x, process_state=True):
+
+        inventory_sum = None
+        # Process state if needed
+        if process_state:
+            inventory_sum = x['store_inventories'].sum(dim=2)
+            x = x['store_inventories']
+            # Flatten input, except for the batch dimension
+            x = x.flatten(start_dim=1)
+
+        # Get features and add store dimension
+        features = self.get_features(x)
+        features = features.unsqueeze(1)
+   
+        outputs = {}
+        
+        # Discrete head remains unchanged
+        if 'discrete' in self.heads_layers:
+            outputs['discrete'] = self.heads_layers['discrete'](features)
+
+        # Continuous head implements S=62 policy
+        if 'continuous' in self.heads_layers and process_state:
+            # Sum inventory across time dimension
+            # inventory_sum = x.sum(dim=2, keepdim=True)
+            # print(f'inventory_sum: {inventory_sum[0]}')
+            
+            # Calculate order amount: max(0, min(1, (62 - inventory_sum)/62))
+            # This ensures output is between 0 and 1, which will then be scaled by the feature registry
+            target_inv = 62.0
+            continuous_output = torch.clamp((target_inv - inventory_sum) / target_inv, min=0.0, max=1.0)
+            # currently it is a tensor of shape (batch_size, 1). make it a tensor of shape (batch_size, 1, discrete_size[-1])
+            continuous_output = continuous_output.unsqueeze(2).expand(outputs['discrete'].shape)
+            # print(f'continuous_output: {continuous_output[0]}')
+            # print(f'continuous_output: {continuous_output.shape}')
+            
+            # Reshape to match expected dimensions
+            outputs['continuous'] = continuous_output
+
+        # print(f'outputs["continuous"]: {outputs["continuous"][0]}')
         return outputs
 
 class NeuralNetworkCreator:
@@ -751,6 +842,7 @@ class NeuralNetworkCreator:
             'returns_nv': ReturnsNV,
             'just_in_time': JustInTime,
             'hybrid_policy': HybridPolicy,
+            'hybrid_policy_ss': HybridPolicySS,
             }
         return architectures[name]
     

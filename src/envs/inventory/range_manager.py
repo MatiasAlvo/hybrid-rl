@@ -234,7 +234,7 @@ class RangeManager:
         # print(f'average probs: {probs.mean(dim=0)}')
         return probs
     
-    def get_continuous_values(self, raw_values):
+    def get_scaled_continuous_values(self, raw_values):
         """Scale continuous values to [0,1] range"""
         if raw_values is None:
             return None

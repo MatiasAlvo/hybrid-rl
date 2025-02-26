@@ -6,7 +6,7 @@ from collections import defaultdict as DefaultDict
 import logging
 from datetime import datetime
 import os
-
+import random
 # Core imports
 from src import np, torch, yaml
 from torch.utils.data import DataLoader
@@ -40,7 +40,9 @@ from src.utils.config_loader import ConfigLoader
 from src.utils.logging_config import setup_logging
 from src.utils.config import Config
 
-# torch.autograd.set_detect_anomaly(True)  # This will help detect anomalies in backward passes
+if False:
+    torch.autograd.set_detect_anomaly(True)  # This will help detect anomalies in backward passes
+    print('Anomaly detection enabled')
 
 def get_timestamp():
     """Get current timestamp for model saving"""
@@ -174,9 +176,11 @@ def run_training(setting_config, hyperparams_config, mode='both'):
         'nn_params': nn_params,
     }
 
-    # Create model and optimizer
+    # Add right before model creation:
+    print(f"Creating model with policy: {nn_params['policy_network']['name']}")
     if feature_registry:
         model = HybridAgent(agent_config, feature_registry, device=device)
+        print(f"Created model with policy class: {type(model.policy).__name__}")
     else:
         model = HDPOAgent(agent_config, device=device)
 
@@ -211,25 +215,31 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     # Load previous model if specified
     if trainer_params['load_previous_model']:
         print(f'Loading model from {trainer_params["load_model_path"]}')
-        checkpoint = torch.load(trainer_params['load_model_path'])
+        checkpoint = torch.load(trainer_params['load_model_path'], weights_only=True)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print("Model loaded successfully")
 
     # Initialize simulator based on type
     simulator = (HybridSimulator(feature_registry, device=device) 
                 if feature_registry else 
                 Simulator(device=device))
 
-    # We will create a folder for each day of the year, and a subfolder for each model
-    trainer_params['save_model_folders'] = [trainer.get_year_month_day(), nn_params['policy_network']['name']]
+    # raise an error if the setting_config['problem_params']['setting_name'] is not equal to the hyperparams_config['logging_params']['setting_name']
+    if setting_config['problem_params']['setting_name'] != hyperparams_config['logging_params']['setting_name']:
+        raise ValueError(f'Setting name in setting_config ({setting_config["problem_params"]["setting_name"]}) does not match setting name in hyperparams_config ({hyperparams_config["logging_params"]["setting_name"]})')
 
-    # We will simply name the model with the current time stamp
-    trainer_params['save_model_filename'] = trainer.get_time_stamp()
+    # We will create a folder for each day of the year, and a subfolder for each model
+    trainer_params['save_model_folders'] = [trainer.get_year_month_day(), setting_config['problem_params']['setting_name'], nn_params['policy_network']['name']]
+
+    # We will simply name the model with the current time stamp + a random number between 0 and 1000 to avoid overwriting
+    trainer_params['save_model_filename'] = str(trainer.get_time_stamp()) + f'_{random.randint(0, 1000)}'
 
     # Create loss function
     loss_function = PolicyLoss()
 
     train_metrics = None
+    dev_metrics = None
     test_metrics = None
     
     # Run training if requested
@@ -253,14 +263,15 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     if mode in ['test', 'both']:
         print('Starting testing...')
         test_metrics, _ = trainer.test(
-            loss_function, 
-            simulator, 
-            model, 
-            data_loaders, 
-            optimizer_wrapper, 
-            problem_params, 
-            observation_params, 
-            params_by_dataset, 
+            loss_function,
+            simulator,
+            model,
+            data_loaders,
+            optimizer_wrapper,
+            problem_params,
+            observation_params,
+            params_by_dataset,
+            trainer_params,
             discrete_allocation=store_params['demand']['distribution'] == 'poisson' and False
         )
         print(f'Test metrics: {test_metrics}')
@@ -303,7 +314,7 @@ if __name__ == "__main__":
         hyperparams_config = yaml.safe_load(file)
 
     # Run training/testing with specified mode
-    train_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode=mode)
+    train_metrics, dev_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode=mode)
     
     # Print test metrics if they exist
     if test_metrics is not None:
