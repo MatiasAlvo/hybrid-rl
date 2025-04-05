@@ -116,6 +116,14 @@ def train_sweep(sweep_config):
                 'pathwise_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'pathwise_coef']),
                 'reward_scaling_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling_pathwise']),
                 'max_grad_norm': ('hyperparams', ['optimizer_params', 'ppo_params', 'max_grad_norm']),
+                # Unified temperature parameters
+                'initial_temperature': ('hyperparams', ['agent_params', 'initial_temperature']),
+                'min_temperature': ('hyperparams', ['agent_params', 'min_temperature']),
+                'temperature_decay': ('hyperparams', ['agent_params', 'temperature_decay']),
+                'use_straight_through': ('hyperparams', ['agent_params', 'use_straight_through']),
+                'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
+                # Add mapping for threshold parameter
+                'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
             }
             
             # Update configs based on sweep parameters from run.config
@@ -124,13 +132,30 @@ def train_sweep(sweep_config):
                     config_type, param_path = param_mappings[param_name]
                     target_config = hyperparams_config if config_type == 'hyperparams' else setting_config
                     
-                    # Navigate to the correct nested dict
-                    current_dict = target_config
-                    for key in param_path[:-1]:
-                        if key not in current_dict:
-                            current_dict[key] = {}
-                        current_dict = current_dict[key]
-                    current_dict[param_path[-1]] = param_value
+                    # Navigate to the correct nested dict/list
+                    current = target_config
+                    for i, key in enumerate(param_path[:-1]):
+                        if isinstance(current, dict):
+                            if key not in current:
+                                current[key] = {} if i < len(param_path) - 2 else []
+                            current = current[key]
+                        elif isinstance(current, list):
+                            # Ensure list is long enough
+                            while len(current) <= key:
+                                current.append(None)
+                            if i < len(param_path) - 2:
+                                if current[key] is None:
+                                    current[key] = {} if isinstance(param_path[i + 1], str) else []
+                            current = current[key]
+                    
+                    # Set the final value
+                    if isinstance(current, dict):
+                        current[param_path[-1]] = param_value
+                    elif isinstance(current, list):
+                        # Ensure list is long enough
+                        while len(current) <= param_path[-1]:
+                            current.append(None)
+                        current[param_path[-1]] = param_value
 
             # Add relevant problem parameters as tags
             problem_params = setting_config.get('problem_params', {})
@@ -140,7 +165,8 @@ def train_sweep(sweep_config):
                 f"echelons_{problem_params.get('n_extra_echelons', 0)}",
                 'hybrid' if problem_params.get('is_hybrid', False) else 'single',
                 'profit' if problem_params.get('maximize_profit', False) else 'cost',
-                'lost_demand' if problem_params.get('lost_demand', False) else 'backorder'
+                'lost_demand' if problem_params.get('lost_demand', False) else 'backorder',
+                hyperparams_config['agent_params']['agent_type']
             ]
 
             # Run training
@@ -191,67 +217,75 @@ def create_sweep_config(config_files):
             # Original parameters
             'learning_rate': {
                 'distribution': 'log_uniform_values',
-                'min': 1e-4,
-                'max': 1e-3
+                'min': 1e-5,
+                # 'min': 1e-4,
+                'max': 1e-2
+                # 'max': 1e-3
             },
             'anneal_lr': {
-                'values': [True]
-                # 'values': [True, False]
+                # 'values': [True]
+                'values': [True, False]
             },
             'num_epochs': {
-                # 'values': [1]
-                'values': [5]
+                # 'values': [5]
+                'values': [3, 5, 10]
             },
             'value_function_coef': {
                 'distribution': 'log_uniform_values',
                 'min': 0.1,
-                'max': 0.2
+                'max': 10.0
+                # 'max': 0.2
             },
             'gamma': {
                 'distribution': 'uniform',
-                'min': 0.92,
-                'max': 0.95
+                'min': 0.9,
+                # 'min': 0.92,
+                'max': 0.99
+                # 'max': 0.95
             },
             'gae_lambda': {
                 'distribution': 'uniform',
-                'min': 0.95,
-                'max': 0.97
+                'min': 0.9,
+                # 'min': 0.95,
+                'max': 0.99
+                # 'max': 0.97
             },
             'clip_coef': {
                 'distribution': 'uniform',
                 'min': 0.1,
-                'max': 0.2
+                'max': 0.3
+                # 'max': 0.2
             },
             # New parameters
             'policy_activation': {
-                'values': ['ELU']
+                # 'values': ['Tanh'] # well-performing for HybridAgent
                 # 'values': ['ELU']
-                # 'values': ['Tanh', 'ReLU', 'ELU']
+                'values': ['Tanh', 'ReLU', 'ELU']
             },
             'value_activation': {
-                'values': ['ELU']
+                # 'values': ['Tanh'] # well-performing for HybridAgent
                 # 'values': ['ELU']
-                # 'values': ['Tanh', 'ReLU', 'ELU']
+                'values': ['Tanh', 'ReLU', 'ELU']
             },
             'normalize_advantages': {
-                'values': [True]
-                # 'values': [False, True]
+                # 'values': [True]
+                'values': [False, True]
             },
             'use_gae': {
-                'values': [True]
-                # 'values': [True, False]
+                # 'values': [True]
+                'values': [True, False]
             },
             'normalize_observations': {
-                # 'values': [False, True]
-                'values': [False]
+                'values': [False, True]
+                # 'values': [False]
             },
             'reward_scaling': {
-                'values': [True]
-                # 'values': [False, True]
+                # 'values': [True]
+                'values': [False, True]
             },
             'buffer_periods': {
-                'values': [50]  # Adjust range as needed
-                # 'values': [0, 20, 50]  # Adjust range as needed
+                # 'values': [50]  # Adjust range as needed
+                'values': [0, 20, 50]  # Adjust range as needed
             },
             'pathwise_coef': {
                 'distribution': 'uniform',
@@ -267,6 +301,37 @@ def create_sweep_config(config_files):
                 'min': 5.0,
                 'max': 10.0
             },
+            # Gumbel-Softmax parameters
+            'initial_temperature': {
+                'distribution': 'log_uniform_values',
+                'min': 1.0,
+                'max': 10.0
+            },
+            'min_temperature': {
+                'distribution': 'log_uniform_values',
+                'min': 0.001,
+                'max': 0.2
+            },
+            'temperature_decay': {
+                # 'values': [1.0]
+                'distribution': 'uniform',
+                'min': 0.97,
+                'max': 0.995
+            },
+            'use_straight_through': {
+                # 'values': [True, False]  # Try both options
+                'values': [False]  # Try both options
+            },
+            'add_gumbel_noise': {
+                'values': [False]  # Try both options
+                # 'values': [True, False]  # Try both options
+            },
+            # # Add new parameter for threshold sweep
+            # 'fixed_ordering_cost_threshold': {
+            #     'distribution': 'uniform',
+            #     'min': 0.0,
+            #     'max': 30.0
+            # },
             # Store complete original configs
             'setting_config': {
                 'value': setting_config

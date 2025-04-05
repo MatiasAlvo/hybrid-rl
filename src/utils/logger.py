@@ -11,7 +11,7 @@ import datetime
 class Logger:
     def __init__(self, config: Dict[str, Any], model: Optional[torch.nn.Module] = None):
         """
-        Initialize logger with both TensorBoard and W&B support
+        Initialize logger with W&B support only
         
         Args:
             config: Dictionary containing logging configuration
@@ -19,10 +19,11 @@ class Logger:
         """
         logging_params = config.hyperparams_config.get('logging_params', {})
         self.use_wandb = logging_params.get('use_wandb', False)
-        self.use_tensorboard = logging_params.get('use_tensorboard', False)
+        # Remove tensorboard initialization entirely
+        self.use_tensorboard = False
         
         # If no logging is enabled, return early
-        if not (self.use_wandb or self.use_tensorboard):
+        if not self.use_wandb:
             return
             
         self.current_metrics = {}
@@ -39,13 +40,6 @@ class Logger:
         exp_name = logging_params.get('exp_name', 'default')
         env_name = logging_params.get('env_name', 'default')
         self.run_name = f"{env_name}__{exp_name}__{timestamp}"
-        
-        # Set up logging directory only if tensorboard is enabled
-        if self.use_tensorboard:
-            self.log_dir = self._setup_log_dir(config)
-            # Initialize tensorboard
-            self.writer = SummaryWriter(self.log_dir)
-            print(f"Logging to TensorBoard at: {self.log_dir}")
         
         # Initialize W&B if enabled
         if self.use_wandb and wandb.run is None:
@@ -74,11 +68,11 @@ class Logger:
                 print("Continuing without wandb logging...")
                 self.use_wandb = False
         
-        # Log hyperparameters only if logging is enabled
-        if self.use_wandb or self.use_tensorboard:
+        # Log hyperparameters only if wandb is enabled
+        if self.use_wandb:
             self._log_hyperparameters(config)
         
-        self.step_counter = 0  # Add a step counter
+        self.step_counter = 0
         if self.use_wandb:
             print(f"Config: {config}")
             if model is not None:
@@ -90,20 +84,17 @@ class Logger:
             'test/loss/best': float('inf')
         }
 
-    def _setup_log_dir(self, config: Dict[str, Any]):
-        # Create absolute path for logs
-        root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.log_dir = os.path.join(root_dir, "logs", "runs", self.run_name)
-        
-        # Create log directory if it doesn't exist
-        os.makedirs(self.log_dir, exist_ok=True)
-        
-        return self.log_dir
-
     def _log_hyperparameters(self, config: Dict[str, Any]):
         """
-        Log hyperparameters in an organized way to TensorBoard and save config file
+        Log hyperparameters in an organized way to W&B
         """
+        # Skip if wandb is not enabled
+        if not self.use_wandb:
+            return
+            
+        # Build markdown text for wandb
+        markdown_text = "# Hyperparameters\n\n"
+        
         # Define parameter groups
         param_groups = OrderedDict({
             "Problem Settings": [
@@ -139,9 +130,6 @@ class Logger:
                     return None
             return value
 
-        # Build markdown text
-        markdown_text = "# Hyperparameters\n\n"
-        
         for group_name, params in param_groups.items():
             markdown_text += f"## {group_name}\n"
             markdown_text += "|Parameter|Value|\n|-|-|\n"
@@ -164,15 +152,12 @@ class Logger:
                     values = data.get('values', [])
                     markdown_text += f"|{feature}|{thresholds}|{values}|\n"
 
-        # Log to TensorBoard only if enabled
-        if self.use_tensorboard:
-            self.writer.add_text("hyperparameters", markdown_text)
-            
-            # Save full config as YAML for reference
-            config_path = os.path.join(self.log_dir, 'full_config.yaml')
-            with open(config_path, 'w') as f:
-                yaml.dump(config, f, default_flow_style=False)
-    
+        # Log to wandb only if enabled
+        if self.use_wandb:
+            wandb.log({"hyperparameters": markdown_text})
+            # Log the full config directly to wandb instead of saving locally
+            wandb.config.update(config.get_complete_config(), allow_val_change=True)
+
     def watch_model(self):
         """
         Start watching model after it's been initialized
@@ -191,7 +176,7 @@ class Logger:
 
     def log_metrics(self, metrics: Dict[str, float], epoch: Optional[int] = None, prefix: str = ""):
         """Store metrics and track best values"""
-        if not (self.use_wandb or self.use_tensorboard):
+        if not self.use_wandb:
             return
             
         # Update best metrics
@@ -205,6 +190,7 @@ class Logger:
         for name, value in metrics.items():
             if prefix:
                 name = f"{prefix}/{name}"
+            # Store the metric, preserving wandb.Histogram objects
             self.current_metrics[name] = value
         
         if epoch is not None:
@@ -212,7 +198,7 @@ class Logger:
 
     def log_model_weights(self, model: torch.nn.Module, step: int):
         """Log model weight histograms and statistics"""
-        if not (self.use_wandb or self.use_tensorboard):
+        if not self.use_wandb:
             return
             
         for name, param in model.named_parameters():
@@ -261,19 +247,19 @@ class Logger:
             return
             
         try:
+            # Log metrics to wandb
             wandb.log(self.current_metrics)
         except Exception as e:
             print(f"Warning: Failed to log metrics to wandb: {e}")
-        self.current_metrics = {}  # Clear the metrics after logging
+        
+        # Clear the metrics after logging
+        self.current_metrics = {}
 
     def close(self):
-        """Close all logging connections"""
+        """Close wandb connection"""
         if self.use_wandb:
             self.flush_metrics()
             try:
                 wandb.finish()
             except Exception as e:
-                print(f"Warning: Error closing wandb: {e}")
-        
-        if self.use_tensorboard:
-            self.writer.close() 
+                print(f"Warning: Error closing wandb: {e}") 

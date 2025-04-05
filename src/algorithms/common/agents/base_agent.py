@@ -33,10 +33,6 @@ class BaseAgent(nn.Module):
             return list(self.policy.parameters()) + list(self.value_net.parameters())
         return self.policy.parameters()
     
-    def transform_outputs(self, raw_outputs):
-        """Transform network outputs to action space. Override in subclasses."""
-        raise NotImplementedError
-    
     def forward(self, observation):
 
         raise NotImplementedError

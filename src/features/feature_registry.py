@@ -1,8 +1,9 @@
 from dataclasses import dataclass
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import torch
 from src.envs.inventory.range_manager import RangeManager
 import torch.nn.functional as F
+import torch.distributions as dist
 
 @dataclass
 class FeatureRange:
@@ -16,7 +17,6 @@ class FeatureRegistry:
         self.config = config
         self.range_manager = range_manager
         self.network_dims = self._get_network_dimensions()
-        self.device = config.get('device', 'cpu')
         
         # Setup feature processing (for future PPO use)
         self.state_features = self._setup_state_features()
@@ -26,12 +26,29 @@ class FeatureRegistry:
     def _get_network_dimensions(self):
         """Get dimensions from policy configuration"""
         policy_params = self.config['policy_network']
-            
-        return {
+        
+        # Handle different possible head configurations
+        heads = policy_params.get('heads', {})
+        
+        dimensions = {
             'input_size': policy_params.get('input_size', 2),
-            'n_discrete': policy_params['heads']['discrete']['size'],
-            'n_continuous': policy_params['heads']['continuous']['size']
+            'n_discrete': 0,
+            'n_continuous': 0
         }
+        
+        # Check for discrete head
+        if 'discrete' in heads:
+            dimensions['n_discrete'] = heads['discrete'].get('size', 0)
+            
+        # Check for continuous head
+        if 'continuous' in heads:
+            dimensions['n_continuous'] = heads['continuous'].get('size', 0)
+            
+        # Check for continuous_mean and continuous_log_std (GaussianPPOAgent)
+        if 'continuous_mean' in heads:
+            dimensions['n_continuous'] = heads['continuous_mean'].get('size', 0)
+            
+        return dimensions
     
     def get_network_dimensions(self):
         """Return network dimensions"""
@@ -40,55 +57,540 @@ class FeatureRegistry:
     def get_simulator_config(self):
         """Return simulator configuration"""
         return {
-            'type': 'hybrid',
+            'type': 'hybrid', 
             'discrete_size': self.network_dims['n_discrete'],
             'continuous_size': self.network_dims['n_continuous'],
             'input_size': self.network_dims['input_size']
         }
     
-    def process_network_output(self, raw_outputs, argmax=False, sample=False):
-        """Process network outputs into action space"""
+    def get_observation_keys(self):
+        """Return observation keys for value network"""
+        # You might want to customize this based on your specific environment
+        return ['store_inventories']
+    
+    def process_network_output(self, raw_outputs, argmax=False, sample=False, random_continuous=False, straight_through=False, discrete_probs=None):
+        """
+        Process network outputs into action space - works for all agent types
+        
+        Args:
+            raw_outputs: Dictionary of raw network outputs
+            argmax: Whether to take argmax for discrete actions
+            sample: Whether to sample from discrete distribution
+            random_continuous: Whether to sample from Gaussian distribution for continuous actions
+            straight_through: Whether to apply straight-through gradient estimation
+        """
         # Get discrete probabilities if discrete head exists
-        discrete_probs = None
+        discrete_action_indices = None
+        logits = None
+        
         if 'discrete' in raw_outputs:
-            discrete_probs = self.range_manager.get_discrete_probabilities(
-                raw_outputs['discrete'], 
-                argmax=argmax,
-                sample=sample
-            )
+            # For FactoredGaussianPPOAgent, one-hot is already passed, so we should not compute it
+            if discrete_probs is None:
+                # Apply softmax, then argmax if argmax is True, or sample if sample is True (and return one-hot)
+                discrete_probs = self.range_manager.get_discrete_probabilities(
+                    raw_outputs['discrete'], 
+                    argmax=argmax,
+                    sample=sample
+                )
+            
+            # Apply straight-through gradient estimation if requested
+            if straight_through and not argmax:  # Only apply when not using argmax
+                # Get hard one-hot encoding (forward pass)
+                indices = torch.argmax(discrete_probs, dim=-1, keepdim=True)
+                hard_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
+                
+                # Straight-through trick: hard values in forward pass, but gradients flow through soft values
+                discrete_probs = hard_probs - discrete_probs.detach() + discrete_probs
+            
             # Get indices of selected actions (where the 1s are in discrete_probs)
-            discrete_actions = discrete_probs.argmax(dim=-1)  # This gives us indices instead of one-hot
+            discrete_action_indices = discrete_probs.argmax(dim=-1)  # This gives us indices instead of one-hot
             # Get logits for selected actions - using gather with proper reshaping
-            action_logits = raw_outputs['discrete'].gather(-1, discrete_actions.unsqueeze(-1)).squeeze(-1)
+            logits = raw_outputs['discrete'].gather(-1, discrete_action_indices.unsqueeze(-1)).squeeze(-1)
         
         # Get continuous values if continuous head exists
         continuous_values = None
+        raw_continuous_samples = None
+        
+        # Handle continuous values (standard or Gaussian)
         if 'continuous' in raw_outputs:
-            # First get [0,1] values
-            continuous_values = self.range_manager.get_scaled_continuous_values(
-                raw_outputs['continuous']
-            )
-            # print(f'continuous_values after get_scaled_continuous_values: {continuous_values[0]}')
-            # Then scale to actual ranges
+            raw_continuous_samples = raw_outputs['continuous']
+            
+            # If random_continuous is True and we have mean/std, override with sampled values
+            if random_continuous and 'continuous_mean' in raw_outputs and 'continuous_log_std' in raw_outputs:
+                continuous_mean = raw_outputs['continuous_mean']
+                continuous_log_std = torch.clamp(raw_outputs['continuous_log_std'], min=-20, max=2)
+                continuous_std = torch.exp(continuous_log_std)
+                
+                # Sample from the Gaussian distribution - ensure all tensors are on the same device
+                epsilon = torch.randn_like(continuous_mean, device=continuous_mean.device)
+                raw_continuous_samples = continuous_mean + continuous_std * epsilon
+            
+            # Process the continuous values
+            continuous_values = self.range_manager.get_scaled_continuous_values(raw_continuous_samples)
             continuous_values = self.range_manager.scale_continuous_by_ranges(
                 continuous_values,
                 self.range_manager.get_continuous_ranges()
             )
-            # print(f'continuous_values in feature_registry: {continuous_values[0]}')
+        
         # Combine discrete and continuous actions into feature-specific actions
         feature_actions = self.range_manager.compute_feature_actions(
             discrete_probs, 
             continuous_values
         )
         
-        return {
+        # If using random_continuous (GaussianPPO), add continuous log probs of selected actions
+        if random_continuous and 'continuous_mean' in raw_outputs and 'continuous_log_std' in raw_outputs:
+            continuous_mean = raw_outputs['continuous_mean']
+            continuous_log_std = torch.clamp(raw_outputs['continuous_log_std'], min=-20, max=2)
+            continuous_std = torch.exp(continuous_log_std)
+            
+            # Get log probs for all continuous actions
+            normal_dist = torch.distributions.Normal(continuous_mean, continuous_std)
+            continuous_log_probs = normal_dist.log_prob(raw_continuous_samples)  # [batch, n_discrete, n_continuous]
+            
+            # Add selected continuous log probs to discrete logits
+            logits = logits + continuous_log_probs.gather(-1, discrete_action_indices.unsqueeze(-1)).squeeze(-1)
+        
+        # Create action dictionary with common format for all agent types
+        action_dict = {
             'discrete_probs': discrete_probs,  # One-hot format
-            'discrete_actions': discrete_actions,  # Index format
-            'action_logits': action_logits,
-            'logits': raw_outputs['discrete'],  # Full logits
+            'discrete_action_indices': discrete_action_indices,  # Index format
+            'logits': logits,  # Combined logits of selected actions (both discrete and continuous)
             'continuous_values': continuous_values,
             'feature_actions': feature_actions
         }
+        
+        # Include raw continuous samples when using random_continuous
+        if random_continuous and raw_continuous_samples is not None:
+            action_dict['raw_continuous_samples'] = raw_continuous_samples
+        
+        return action_dict
+    
+    def process_continuous_only_output(self, continuous_values, temperature=0.5, argmax=False, straight_through=False, zero_out_indices=None, train=True):
+        """
+        Process the output of a ContinuousOnlyAgent that only produces continuous values.
+        Creates an implied discrete distribution using the sigmoid difference approach.
+        
+        Args:
+            continuous_values: Tensor containing the continuous action values
+            temperature: Temperature parameter controlling the steepness of sigmoid transitions
+            argmax: When True, convert discrete probabilities to one-hot vectors
+            straight_through: Whether to apply straight-through gradient estimation
+            zero_out_indices: List of indices to zero-out in repeated_continuous
+            train: Whether we are in training mode
+        """
+        # Scale continuous values to [0, 1] range
+        scaled_continuous = torch.sigmoid(continuous_values)
+        
+        # Get the overall range from the first and last breakpoints
+        breakpoints = self.range_manager.breakpoints
+        if len(breakpoints) < 2:
+            return None
+        
+        min_val = breakpoints[0]
+        max_val = breakpoints[-1]
+        
+        # Scale to the overall range
+        scaled_continuous_values = min_val + scaled_continuous * (max_val - min_val)
+        
+        # Create implied discrete probabilities using sigmoid difference approach
+        discrete_probs = self._create_implied_discrete_probabilities(
+            scaled_continuous_values, temperature
+        )
+        
+        # Apply straight-through gradient estimation if requested
+        if straight_through and not argmax:  # Only apply when not using argmax
+            # Get hard one-hot encoding (forward pass)
+            indices = torch.argmax(discrete_probs, dim=-1, keepdim=True)
+            hard_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
+            
+            # Straight-through trick: hard values in forward pass, but gradients flow through soft values
+            discrete_probs = hard_probs - discrete_probs.detach() + discrete_probs
+        # Apply argmax if requested (for inference/evaluation)
+        elif argmax:
+            # Get indices of maximum probabilities
+            indices = discrete_probs.argmax(dim=-1, keepdim=True)
+            # Create one-hot vectors
+            discrete_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
+        
+        # Duplicate the continuous values for each sub-range
+        n_sub_ranges = len(breakpoints) - 1
+        
+        # Use expand by default for memory efficiency
+        repeated_continuous = scaled_continuous_values.expand(scaled_continuous_values.shape[0], scaled_continuous_values.shape[1], n_sub_ranges)
+        
+        # If we need to zero out indices during inference, switch to repeat to create a new tensor
+        if zero_out_indices is not None and not train:
+            # Print warning only once using a class attribute
+            if not hasattr(self, '_zero_out_warning_printed'):
+                print(f"Warning: Zeroing out indices {zero_out_indices} during inference")
+                print(f"Breakpoints: {breakpoints}")
+                self._zero_out_warning_printed = True
+            
+            # Create a new tensor using repeat instead of expand
+            repeated_continuous = scaled_continuous_values.repeat(1, 1, n_sub_ranges)
+            for idx in zero_out_indices:
+                if idx < repeated_continuous.shape[-1]:
+                    repeated_continuous[:, :, idx] = 0.0
+        
+        # Now that we have both discrete_probs and repeated_continuous, compute feature actions
+        feature_actions = self.range_manager.compute_feature_actions(
+            discrete_probs, repeated_continuous
+        )
+        
+        # Create action dictionary with same format as process_network_output
+        action_dict = {
+            'discrete_probs': discrete_probs,
+            'discrete_action_indices': discrete_probs.argmax(dim=-1) if discrete_probs is not None else None,
+            'logits': None,  # No discrete logits in this approach
+            'continuous_values': repeated_continuous,
+            'feature_actions': feature_actions
+        }
+        
+        return action_dict
+    
+    def _initialize_sigmoid_scaling(self, device=None):
+        """
+        Initialize scaling factors and masks for efficient sigmoid probability calculation.
+        This should be called once during agent initialization.
+        """
+        # Get breakpoints from range_manager
+        breakpoints = self.range_manager.breakpoints
+        
+        if len(breakpoints) < 2:
+            self.sigmoid_scaling_initialized = False
+            return
+        
+        # Handle duplicate breakpoints
+        epsilon = 1e-5
+        shifted_breakpoints = []
+        prev_point = None
+        
+        for point in breakpoints:
+            if prev_point is not None and point == prev_point:
+                shifted_breakpoints.append(point - epsilon)
+                shifted_breakpoints.append(point + epsilon)
+            else:
+                shifted_breakpoints.append(point)
+            prev_point = point
+        
+        # Convert to tensor and store
+        self.breakpoints = torch.tensor(shifted_breakpoints, device=device)
+        
+        # Compute range lengths and scaling factors
+        n_ranges = len(self.breakpoints) - 1
+        range_lengths = self.breakpoints[1:] - self.breakpoints[:-1]
+        max_range_length = torch.max(range_lengths)
+        
+        # Create scaling factors for each breakpoint
+        breakpoint_scalings = torch.ones(len(self.breakpoints), device=device)
+        
+        # For internal breakpoints, use scaling from the next range
+        for i in range(1, len(self.breakpoints) - 1):
+            next_range_length = range_lengths[i]
+            breakpoint_scalings[i] = max_range_length / next_range_length
+        
+        # For first and last breakpoints, use scaling from adjacent range
+        breakpoint_scalings[0] = max_range_length / range_lengths[0]
+        breakpoint_scalings[-1] = max_range_length / range_lengths[-1]
+        
+        # Store these values for later use
+        self.n_ranges = n_ranges
+        self.breakpoint_scalings = breakpoint_scalings
+        
+        # Create left/right index tensors for vectorized operations
+        # [0, 1, 2, ..., n_ranges-1] for left breakpoints
+        self.left_idxs = torch.arange(n_ranges, device=device)
+        # [1, 2, 3, ..., n_ranges] for right breakpoints
+        self.right_idxs = torch.arange(1, n_ranges+1, device=device)
+        
+        # Create masks for special cases
+        self.is_leftmost_range = torch.zeros(n_ranges, dtype=torch.bool, device=device)
+        self.is_leftmost_range[0] = True
+        
+        self.is_rightmost_range = torch.zeros(n_ranges, dtype=torch.bool, device=device)
+        self.is_rightmost_range[-1] = True
+        
+        # Mark initialization as complete
+        self.sigmoid_scaling_initialized = True
+        
+    def _create_implied_discrete_probabilities(self, continuous_values, temperature):
+        """
+        Create implied discrete probabilities from continuous values using scaled sigmoid differences.
+        Uses the same scaling logic as the visualization routine for consistency.
+        
+        Args:
+            continuous_values: Tensor containing the continuous action values
+            temperature: Temperature parameter controlling the steepness of sigmoid transitions
+            
+        Returns:
+            discrete_probs: Tensor containing the implied discrete probabilities
+        """
+        # Check if initialization has been done
+        if not hasattr(self, 'sigmoid_scaling_initialized') or not self.sigmoid_scaling_initialized:
+            self._initialize_sigmoid_scaling(device=continuous_values.device)
+            if not self.sigmoid_scaling_initialized:
+                return None
+        
+        # Ensure continuous_values is float32 to match model weights
+        continuous_values = continuous_values.float()
+        
+        # Get breakpoints from range_manager
+        breakpoints = self.range_manager.breakpoints
+        
+        if len(breakpoints) < 2:
+            return None
+        
+        # Handle duplicate breakpoints by shifting with a small epsilon
+        epsilon = 1e-5
+        shifted_breakpoints = []
+        prev_point = None
+        
+        for point in breakpoints:
+            if prev_point is not None and point == prev_point:
+                # If this breakpoint is the same as the previous one, shift it slightly
+                shifted_breakpoints.append(point - epsilon)
+                shifted_breakpoints.append(point + epsilon)
+            else:
+                shifted_breakpoints.append(point)
+            prev_point = point
+        
+        # Convert to tensor with explicit float type
+        breakpoints = torch.tensor(shifted_breakpoints, device=continuous_values.device, dtype=torch.float32)
+        
+        # Get original shape of continuous values
+        batch_shape = continuous_values.shape[:-1]
+        n_ranges = len(breakpoints) - 1
+        
+        # Compute range lengths - same as in visualization
+        range_lengths = breakpoints[1:] - breakpoints[:-1]
+        max_range_length = torch.max(range_lengths)
+        
+        # Create scaling factors for each breakpoint - same as in visualization
+        breakpoint_scalings = torch.ones(len(breakpoints), device=continuous_values.device)
+        
+        # For internal breakpoints, use scaling from the next range
+        for i in range(1, len(breakpoints) - 1):
+            next_range_length = range_lengths[i]
+            breakpoint_scalings[i] = max_range_length / next_range_length
+        
+        # For first and last breakpoints, use scaling from adjacent range
+        breakpoint_scalings[0] = max_range_length / range_lengths[0]
+        breakpoint_scalings[-1] = max_range_length / range_lengths[-1]
+        
+        # Create a tensor to store the weights for each range
+        weights = torch.zeros((*batch_shape, n_ranges), device=continuous_values.device, dtype=torch.float32)
+        
+        # Reshape continuous_values for broadcasting
+        # Add singleton dimension at the end to make it compatible with range-wise operations
+        continuous_values_expanded = continuous_values.unsqueeze(-1)
+        
+        # Calculate sigmoid difference for each range with proper scaling
+        for i in range(n_ranges):
+            a_k = breakpoints[i]
+            a_k_plus_1 = breakpoints[i+1]
+            
+            # Get scaling factors for left and right breakpoints of this range
+            left_scaling = breakpoint_scalings[i]
+            right_scaling = breakpoint_scalings[i+1]
+            
+            # Calculate sigmoid values - same logic as visualization
+            if i == 0:
+                # For leftmost range, left sigmoid is always 1
+                left_sigmoid = torch.ones_like(continuous_values)
+                right_sigmoid = torch.sigmoid((right_scaling * (continuous_values - a_k_plus_1)) / temperature)
+            elif i == n_ranges - 1:
+                # For rightmost range, right sigmoid is always 0
+                left_sigmoid = torch.sigmoid((left_scaling * (continuous_values - a_k)) / temperature)
+                right_sigmoid = torch.zeros_like(continuous_values)
+            else:
+                # Normal case for middle ranges
+                left_sigmoid = torch.sigmoid((left_scaling * (continuous_values - a_k)) / temperature)
+                right_sigmoid = torch.sigmoid((right_scaling * (continuous_values - a_k_plus_1)) / temperature)
+            
+            # Calculate sigmoid difference
+            sigmoid_diff = left_sigmoid - right_sigmoid
+            
+            # Store the clamped weights
+            weights[:, :, i] = torch.clamp(sigmoid_diff[:, :, 0], 0.0, 1.0)
+        
+        # Normalize to ensure we have a valid probability distribution
+        total_weights = weights.sum(dim=-1, keepdim=True)
+        discrete_probs = weights / (total_weights + 1e-10)
+        
+        return discrete_probs
+
+    def _create_implied_discrete_probabilities_v1(self, continuous_values, temperature):
+        """
+        Create implied discrete probabilities from continuous values using scaled sigmoid differences.
+        Uses pre-computed scaling factors and vectorized operations for efficiency.
+        
+        Args:
+            continuous_values: Tensor containing the continuous action values
+            temperature: Temperature parameter controlling the steepness of sigmoid transitions
+            
+        Returns:
+            discrete_probs: Tensor containing the implied discrete probabilities
+        """
+        # Check if initialization has been done
+        if not hasattr(self, 'sigmoid_scaling_initialized') or not self.sigmoid_scaling_initialized:
+            self._initialize_sigmoid_scaling(device=continuous_values.device)
+            if not self.sigmoid_scaling_initialized:
+                return None
+        
+        # Ensure continuous_values is float32 to match model weights
+        continuous_values = continuous_values.float()
+        
+        # Get breakpoints from range_manager
+        breakpoints = self.range_manager.breakpoints
+        
+        if len(breakpoints) < 2:
+            return None
+        
+        # Handle duplicate breakpoints by shifting with a small epsilon
+        epsilon = 1e-5
+        shifted_breakpoints = []
+        prev_point = None
+        
+        for point in breakpoints:
+            if prev_point is not None and point == prev_point:
+                # If this breakpoint is the same as the previous one, shift it slightly
+                shifted_breakpoints.append(point - epsilon)
+                shifted_breakpoints.append(point + epsilon)
+            else:
+                shifted_breakpoints.append(point)
+            prev_point = point
+        
+        # Convert to tensor with explicit float type
+        shifted_breakpoints = torch.tensor(shifted_breakpoints, device=continuous_values.device, dtype=torch.float32)
+        
+        # Get original shape of continuous values
+        batch_shape = continuous_values.shape[:-1]
+        n_sub_ranges = len(shifted_breakpoints) - 1
+        
+        # Create a tensor to store the sigmoid differences for each sub-range
+        discrete_probs = torch.zeros((*batch_shape, n_sub_ranges), device=continuous_values.device, dtype=torch.float32)
+        
+        # Calculate sigmoid difference for each sub-range
+        for i in range(n_sub_ranges):
+            a_k = shifted_breakpoints[i]
+            a_k_plus_1 = shifted_breakpoints[i+1]
+            
+            # Special case for left-most sub-range
+            if i == 0:
+                # Use right sigmoid only (assume left sigmoid is always 1)
+                right_sigmoid = torch.sigmoid((continuous_values - a_k_plus_1) / temperature)
+                sigmoid_diff = 1.0 - right_sigmoid
+            # Special case for right-most sub-range
+            elif i == n_sub_ranges - 1:
+                # Use left sigmoid only (assume right sigmoid is always 0)
+                left_sigmoid = torch.sigmoid((continuous_values - a_k) / temperature)
+                sigmoid_diff = left_sigmoid
+            # Normal case for middle sub-ranges
+            else:
+                # Calculate sigmoid difference for this range
+                left_sigmoid = torch.sigmoid((continuous_values - a_k) / temperature)
+                right_sigmoid = torch.sigmoid((continuous_values - a_k_plus_1) / temperature)
+                sigmoid_diff = left_sigmoid - right_sigmoid
+            
+            # Calculate the scaling factor to ensure maximum weight is 1
+            d = a_k_plus_1 - a_k
+            scaling_factor = 1.0 / (1.0 - 2.0 * torch.sigmoid(-d / (2.0 * temperature)))
+            
+            # Apply scaling factor to ensure maximum is 1
+            scaled_sigmoid_diff = sigmoid_diff * scaling_factor
+            
+            # Store in the discrete_probs tensor
+            discrete_probs[..., i] = scaled_sigmoid_diff[..., 0]
+        
+        # Clamp values to be within [0, 1] to handle potential numerical issues
+        discrete_probs = torch.clamp(discrete_probs, 0.0, 1.0)
+        
+        # Normalize to ensure we have a valid probability distribution
+        discrete_probs = discrete_probs / (discrete_probs.sum(dim=-1, keepdim=True) + 1e-10)
+        
+        return discrete_probs
+
+    def _create_implied_discrete_probabilities_old(self, continuous_values, temperature):
+        """
+        Create implied discrete probabilities from continuous values using sigmoid difference.
+        
+        Args:
+            continuous_values: Tensor containing the scaled continuous action values
+            temperature: Temperature parameter controlling the steepness of sigmoid transitions
+            
+        Returns:
+            discrete_probs: Tensor containing the implied discrete probabilities
+        """
+        # Get breakpoints from range_manager
+        breakpoints = self.range_manager.breakpoints
+        
+        if len(breakpoints) < 2:
+            return None
+        
+        # Handle duplicate breakpoints by shifting with a small epsilon
+        epsilon = 1e-5
+        shifted_breakpoints = []
+        prev_point = None
+        
+        for point in breakpoints:
+            if prev_point is not None and point == prev_point:
+                # If this breakpoint is the same as the previous one, shift it slightly
+                shifted_breakpoints.append(point - epsilon)
+                shifted_breakpoints.append(point + epsilon)
+            else:
+                shifted_breakpoints.append(point)
+            prev_point = point
+        
+        # Convert to tensor
+        shifted_breakpoints = torch.tensor(shifted_breakpoints, device=continuous_values.device)
+        
+        # Get original shape of continuous values
+        batch_shape = continuous_values.shape[:-1]
+        n_sub_ranges = len(shifted_breakpoints) - 1
+        
+        # Create a tensor to store the sigmoid differences for each sub-range
+        discrete_probs = torch.zeros((*batch_shape, n_sub_ranges), device=continuous_values.device)
+        
+        # Calculate sigmoid difference for each sub-range
+        for i in range(n_sub_ranges):
+            a_k = shifted_breakpoints[i]
+            a_k_plus_1 = shifted_breakpoints[i+1]
+            
+            # Special case for left-most sub-range
+            if i == 0:
+                # Use right sigmoid only (assume left sigmoid is always 1)
+                right_sigmoid = torch.sigmoid((continuous_values - a_k_plus_1) / temperature)
+                sigmoid_diff = 1.0 - right_sigmoid
+            # Special case for right-most sub-range
+            elif i == n_sub_ranges - 1:
+                # Use left sigmoid only (assume right sigmoid is always 0)
+                left_sigmoid = torch.sigmoid((continuous_values - a_k) / temperature)
+                sigmoid_diff = left_sigmoid
+            # Normal case for middle sub-ranges
+            else:
+                # Calculate sigmoid difference for this range
+                left_sigmoid = torch.sigmoid((continuous_values - a_k) / temperature)
+                right_sigmoid = torch.sigmoid((continuous_values - a_k_plus_1) / temperature)
+                sigmoid_diff = left_sigmoid - right_sigmoid
+            
+            # Calculate the scaling factor to ensure maximum weight is 1
+            d = a_k_plus_1 - a_k
+            scaling_factor = 1.0 / (1.0 - 2.0 * torch.sigmoid(-d / (2.0 * temperature)))
+            
+            # Apply scaling factor to ensure maximum is 1
+            scaled_sigmoid_diff = sigmoid_diff * scaling_factor
+            
+            # Store in the discrete_probs tensor
+            discrete_probs[..., i] = scaled_sigmoid_diff[..., 0]
+        
+        # Clamp values to be within [0, 1] to handle potential numerical issues
+        discrete_probs = torch.clamp(discrete_probs, 0.0, 1.0)
+        
+        # Normalize to ensure we have a valid probability distribution
+        discrete_probs = discrete_probs / (discrete_probs.sum(dim=-1, keepdim=True) + 1e-10)
+        
+        return discrete_probs
     
     def process_state(self, state):
         return state

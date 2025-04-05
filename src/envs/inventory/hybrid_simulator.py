@@ -91,15 +91,11 @@ class HybridSimulator(Simulator):
             self.observation_params, 
             current_period=self.observation['current_period'].item() + 1
             )
-
-        # print(f'current_demands: {current_demands[0, 0]}')
         
         # 2. Calculate post-demand inventory
         inventory = observation['store_inventories']
         inventory_on_hand = inventory[:, :, 0]
         post_inventory_on_hand = inventory_on_hand - current_demands
-
-        # print(f'post_inventory_on_hand: {post_inventory_on_hand[0, 0]}')
         
         # 3. Calculate variable costs following base simulator pattern
         if self.maximize_profit:
@@ -107,7 +103,6 @@ class HybridSimulator(Simulator):
                 -observation['underage_costs'] * torch.minimum(inventory_on_hand, current_demands) + 
                 observation['holding_costs'] * torch.clip(post_inventory_on_hand, min=0)
             )
-            # print(f'base_costs: {base_costs[0, 0]}')
         else:
             base_costs = (
                 observation['underage_costs'] * torch.clip(-post_inventory_on_hand, min=0) + 
@@ -115,11 +110,9 @@ class HybridSimulator(Simulator):
             )
         
         # Add procurement costs
-        base_costs += observation['procurement_costs']*action_dict['feature_actions']['total_action']
-        # print total action and demand and current period
-        # print(f'total_action: {action_dict["feature_actions"]["total_action"][0, 0]}')
-        # print(f'demand: {current_demands[0, 0]}')
-        # print(f'current_period: {observation["current_period"]}')
+        procurement_cost = observation['procurement_costs']*action_dict['feature_actions']['total_action']
+        base_costs += procurement_cost
+        
         # Sum costs across stores
         base_costs = base_costs.sum(dim=1)
         
@@ -127,33 +120,22 @@ class HybridSimulator(Simulator):
         if self.problem_params.get('lost_demand', False):
             post_inventory_on_hand = torch.clip(post_inventory_on_hand, min=0)
         
-        # print(f'post_inventory_on_hand: {post_inventory_on_hand[0, 0]}')
-        
         # 5. Get allocation from feature actions
         feature_actions = action_dict['feature_actions']
         allocation = feature_actions['total_action']
-        # print(f'allocation: {allocation[0, 0]}')
         
         # 6. Update inventories using same pattern as base simulator
         lead_time = int(observation['lead_times'][0, 0].item())
-        # raise an error if observation['lead_times'] contains more than one differentvalue
         if observation['lead_times'].unique().numel() > 1:
             raise ValueError('observation["lead_times"] contains more than one different value')
-        # lead_time = self.store_params['lead_time']['value']
-        # print(f'inventory: {observation["store_inventories"][0]}')
-        # print(f'post_inventory_on_hand: {post_inventory_on_hand[0]}')
-        # print(f'allocation: {allocation[0]}')
-        # print(f'lead_time: {lead_time}')
+        
         observation['store_inventories'] = self._update_inventories_in_place(
             inventory,
             post_inventory_on_hand,
             allocation,
             lead_time
         )
-        # print(f'observation["store_inventories"]: {observation["store_inventories"][0]}')
-        # print()
 
-        # print(f'observation["store_inventories"]: {observation["store_inventories"][0, 0]}')
         # Update current period
         self.observation['current_period'] += 1
 
@@ -164,9 +146,9 @@ class HybridSimulator(Simulator):
         additional_costs = torch.zeros(self.batch_size, device=self.device)
 
         # Apply all registered cost functions
-        for cost_func in self.cost_functions.values():
-            additional_costs += cost_func(observation, action_dict)
-        # print(f'additional_costs: {additional_costs[0]}')
+        for cost_name, cost_func in self.cost_functions.items():
+            cost = cost_func(observation, action_dict)
+            additional_costs += cost
         
         return additional_costs
     
@@ -250,6 +232,7 @@ class HybridSimulator(Simulator):
         """Calculate fixed ordering costs"""
         feature_probs = action_dict['feature_actions']['fixed_ordering_cost']['range_probs']
         feature_values = action_dict['feature_actions']['fixed_ordering_cost']['values']
+        
         fixed_costs = (feature_probs * feature_values.unsqueeze(0)).sum(dim=(-1, -2))
         return fixed_costs
     

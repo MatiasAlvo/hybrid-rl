@@ -160,6 +160,7 @@ class RangeManager:
                 # Sum probabilities and weighted continuous values for all sub-ranges in this range
                 for j in sub_range_indices:
                     feature_discrete[..., i] += discrete_probs[..., j]
+                    # feature_continuous[..., i] = torch.clamp(feature_continuous[..., i] + discrete_probs[..., j] * continuous_per_sub_range[..., j], min=0)
                     feature_continuous[..., i] += discrete_probs[..., j] * continuous_per_sub_range[..., j]
             
             feature_mappings[feature_name] = {
@@ -219,7 +220,6 @@ class RangeManager:
             probs = F.one_hot(indices, num_classes=logits.size(-1)).float()
         elif sample:
             try:
-
                 indices = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1)  # Sample from last dim
                 probs = torch.zeros_like(probs)
                 probs.scatter_(-1, indices.view(probs.shape[:-1] + (1,)), 1)  # Place 1s in last dim
@@ -285,7 +285,8 @@ class RangeManager:
                 # Sum over the sub-ranges that correspond to this range
                 # (this correspondence was pre-computed in _precompute_feature_range_mappings)
                 sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
-                feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
+                feature_action[..., range_idx] = torch.clamp(torch.sum(sub_actions, dim=-1, keepdim=False), min=0)
+                # feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
                 feature_discrete[..., range_idx] = torch.sum(discrete_probs[..., sub_range_indices], dim=-1, keepdim=False)
             feature_actions[feature_name] = {
                 'action': feature_action,  # Shape: [batch_size, n_stores, n_feature_ranges] (represents the action for each range)
@@ -293,11 +294,11 @@ class RangeManager:
                 'values': mapping['values']
             }
         
-        feature_actions['total_action'] = self.compute_total_action(discrete_probs, continuous_values)
+        feature_actions['total_action'] = self.compute_total_action(discrete_probs, continuous_values, non_negative=True)
         
         return feature_actions
 
-    def compute_total_action(self, discrete_probs, continuous_values):
+    def compute_total_action(self, discrete_probs, continuous_values, non_negative=True):
         """
         Compute the total action as the sum of discrete probabilities multiplied by continuous values.
         
@@ -316,6 +317,9 @@ class RangeManager:
         
         # Sum across the continuous dimension to get total action
         total_action = total_action.sum(dim=-1)  # Shape: [batch_size, n_stores]
+        
+        if non_negative:
+            total_action = torch.clamp(total_action, min=0)
         
         return total_action
     

@@ -248,10 +248,6 @@ class EchelonStock(MyNeuralNetwork):
             dim=1
             )
 
-        # print(f'base_levels: {base_levels}')
-        # print(f'stacked_inv_pos: {stacked_inv_pos[0]}')
-        # print(f'echelon_pos: {torch.stack([(stacked_inv_pos[:, k:].sum(dim=1)) for k in range(2 + n_extra_echelons)], dim=1)[0]}')
-
         # Allocations before truncating by previous locations inventory on hand.
         # We get them by subtracting the echelon inventory position (i.e., sum of inventory positions from k onwards) from the base levels, 
         # and truncating below by 0.
@@ -261,15 +257,8 @@ class EchelonStock(MyNeuralNetwork):
                          dim=1), 
                          min=0)
         
-        # print(f'tentative_allocations: {tentative_allocations[0]}')
         # Truncate below by previous locations inventory on hand
         allocations = torch.minimum(tentative_allocations, shifted_inv_on_hand)
-
-        # print(f'shifted_inv_on_hand: {shifted_inv_on_hand[0]}')
-        # print(f'allocations: {allocations[0]}')
-
-        # print(f'stacked_inv_on_hand.shape: {shifted_inv_on_hand.shape}')
-        # print()
 
         return {
             'stores': allocations[:, -1:],
@@ -679,6 +668,152 @@ class PolicyNetwork(nn.Module):
         x = x.to(self.device)
         return self.backbone(x)
 
+class FactoredPolicy(PolicyNetwork):
+    """Policy network that factors discrete and continuous outputs with separate networks"""
+    def __init__(self, config, device='cpu'):
+        super().__init__(config, device)
+        
+        # Get output dimensions from config
+        self.heads = config['policy_network']['heads']
+        last_hidden = self.hidden_layers[-1]
+        
+        # Create separate networks for discrete and continuous outputs
+        self.discrete_net = nn.Sequential(
+            *self._build_backbone_layers()
+        )
+        
+        # Output layer for discrete actions
+        if self.heads['discrete']['enabled']:
+            self.discrete_head = self.layer_init(
+                nn.Linear(last_hidden, self.heads['discrete']['size']),
+                std=0.01  # Smaller std for policy head
+            )
+        
+        # Continuous network (conditioned on discrete action)
+        if self.heads['continuous']['enabled']:
+            # Get discrete action size for one-hot encoding
+            discrete_size = self.heads['discrete']['size']
+            
+            # Build continuous backbone with additional discrete action input
+            continuous_layers = []
+            
+            # First layer accepts state + one-hot discrete action
+            first_layer = self.layer_init(
+                nn.Linear(self.input_size + discrete_size, self.hidden_layers[0]),
+                std=2**0.5
+            )
+            continuous_layers.append(first_layer)
+            continuous_layers.append(getattr(nn, self.activation)())
+            
+            # Add remaining layers
+            for i in range(1, len(self.hidden_layers)):
+                if self.use_batch_norm:
+                    continuous_layers.append(nn.BatchNorm1d(self.hidden_layers[i-1]))
+                
+                layer = self.layer_init(
+                    nn.Linear(self.hidden_layers[i-1], self.hidden_layers[i]),
+                    std=2**0.5
+                )
+                continuous_layers.append(layer)
+                continuous_layers.append(getattr(nn, self.activation)())
+                
+                if self.dropout_rate > 0:
+                    continuous_layers.append(nn.Dropout(self.dropout_rate))
+            
+            self.continuous_net = nn.Sequential(*continuous_layers)
+            
+            # Output layer for continuous actions - just one value
+            self.continuous_head = self.layer_init(
+                nn.Linear(last_hidden, 1),  # Single continuous output
+                std=0.01  # Smaller std for policy head
+            )
+        
+        self.to(device)
+    
+    def _build_backbone_layers(self):
+        """Build a backbone network"""
+        layers = []
+        prev_size = self.input_size
+        
+        # First layer
+        first_layer = self.layer_init(
+            nn.Linear(self.input_size, self.hidden_layers[0]),
+            std=2**0.5
+        )
+        layers.append(first_layer)
+        layers.append(getattr(nn, self.activation)())
+        
+        if self.dropout_rate > 0:
+            layers.append(nn.Dropout(self.dropout_rate))
+        
+        # Remaining hidden layers
+        for i in range(1, len(self.hidden_layers)):
+            if self.use_batch_norm:
+                layers.append(nn.BatchNorm1d(self.hidden_layers[i-1]))
+            
+            layer = self.layer_init(
+                nn.Linear(self.hidden_layers[i-1], self.hidden_layers[i]),
+                std=2**0.5
+            )
+            layers.append(layer)
+            layers.append(getattr(nn, self.activation)())
+            
+            if self.dropout_rate > 0:
+                layers.append(nn.Dropout(self.dropout_rate))
+        
+        return layers
+    
+    def get_discrete_output(self, x):
+        """Get discrete action logits"""
+        features = self.discrete_net(x)
+        return self.discrete_head(features).unsqueeze(1)
+    
+    def get_continuous_output(self, x, discrete_one_hot):
+        """
+        Get continuous action mean conditioned on state and discrete action
+        Output is a single value per batch item, shape [batch_size, 1]
+        """
+        
+        # Concatenate state with one-hot discrete action
+        combined_input = torch.cat([x, discrete_one_hot], dim=1)
+        
+        # Get features and then output (single value)
+        features = self.continuous_net(combined_input)
+        return self.continuous_head(features)
+    
+    def forward(self, x, process_state=True):
+        """
+        Legacy forward method for compatibility
+        Use get_discrete_output and get_continuous_output instead
+        """
+        if process_state:
+            x = x['store_inventories']
+            x = x.flatten(start_dim=1)
+        
+        # Get discrete output
+        discrete_logits = self.get_discrete_output(x)
+        
+        # Reshape to expected format if needed
+        if len(discrete_logits.shape) == 2:
+            discrete_logits = discrete_logits.unsqueeze(1)
+        
+        outputs = {'discrete': discrete_logits}
+        
+        # For legacy compatibility, just return empty continuous tensor
+        if 'continuous' in self.heads and self.heads['continuous']['enabled']:
+            # Create shape that matches GaussianPPOAgent output:
+            # [batch_size, n_discrete, 2]
+            batch_size = x.size(0)
+            n_discrete = self.heads['discrete']['size']
+            
+            dummy_continuous = torch.zeros(
+                (batch_size, n_discrete, 2), 
+                device=self.device
+            )
+            outputs['continuous'] = dummy_continuous
+            
+        return outputs
+
 
 class HybridPolicy(PolicyNetwork):
     """Policy network for hybrid discrete/continuous actions"""
@@ -704,9 +839,7 @@ class HybridPolicy(PolicyNetwork):
             )
         self.to(self.device)
     def forward(self, x, process_state=True):
-        current_period = 0
         if process_state:
-            current_period = x['current_period']
             x = x['store_inventories']
             x = x.flatten(start_dim=1)
 
@@ -714,33 +847,17 @@ class HybridPolicy(PolicyNetwork):
         base_features = self.get_features(x).unsqueeze(1)
         
         # Create separate feature paths for each head
-        # discrete_features = base_features.unsqueeze(1)
-        # continuous_features = base_features.unsqueeze(1)
-        # discrete_features = base_features.unsqueeze(1).clone()
-        # continuous_features = base_features.unsqueeze(1).clone()
-        
-        # outputs = {}
-        # if 'discrete' in self.heads_layers:
-        #     outputs['discrete'] = self.heads_layers['discrete'](discrete_features)
-        # if 'continuous' in self.heads_layers:
-        #     outputs['continuous'] = self.heads_layers['continuous'](continuous_features)
-
         outputs = {}
         if 'continuous' in self.heads_layers:
-            # continuous_features = base_features.unsqueeze(1)  # No clone for graph preservation
             if True:
-            # if current_period == 107:
-                # print(current_period)
                 outputs['continuous'] = self.heads_layers['continuous'](base_features)
-                # print(f'shape of outputs["continuous"]: {outputs["continuous"].shape}')
             elif process_state:
                 outputs['continuous'] = torch.zeros([128, 1, 2]).to(self.device)
             else:
                 outputs['continuous'] = torch.zeros([2560, 1, 2]).to(self.device)
         if 'discrete' in self.heads_layers:
-            # discrete_features = base_features.unsqueeze(1)  # No clone for graph preservation
-            # outputs['discrete'] = outputs['continuous']
             outputs['discrete'] = self.heads_layers['discrete'](base_features)
+        
             
         return outputs
 
@@ -843,6 +960,7 @@ class NeuralNetworkCreator:
             'just_in_time': JustInTime,
             'hybrid_policy': HybridPolicy,
             'hybrid_policy_ss': HybridPolicySS,
+            'factored_policy': FactoredPolicy,
             }
         return architectures[name]
     

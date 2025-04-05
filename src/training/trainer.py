@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from src.utils.logger import Logger
 import yaml
 import pandas as pd
+import wandb
 
 
 class Trainer():
@@ -150,7 +151,7 @@ class Trainer():
         # Put model in eval mode
         model.eval()
 
-        test_metrics, trajectory_data = self.do_one_epoch(
+        test_metrics, trajectory_data, additional_data = self.do_one_epoch(
                 optimizer, 
                 data_loaders['test'], 
                 loss_function, 
@@ -162,7 +163,8 @@ class Trainer():
                 train=False,
                 ignore_periods=params_by_dataset['test']['ignore_periods'],
                 discrete_allocation=discrete_allocation,
-                return_trajectory=True
+                return_trajectory=True,
+                collect_additional_data=trainer_params.get('compute_metrics_on_test', False)
                 )
         
         # Log only if logger exists
@@ -178,6 +180,7 @@ class Trainer():
         if trainer_params.get('compute_metrics_on_test', False):
             self.compute_and_save_test_metrics(
                 trajectory_data,
+                additional_data,
                 model_name=trainer_params['save_model_filename'],
                 folders=trainer_params['save_model_folders'],
                 simulator=simulator
@@ -188,13 +191,10 @@ class Trainer():
         
         return test_metrics, trajectory_data
 
-    def do_one_epoch(self, optimizer_wrapper, data_loader, loss_function, simulator, model, periods, problem_params, observation_params, train=True, ignore_periods=0, discrete_allocation=False, return_trajectory=False):
+    def do_one_epoch(self, optimizer_wrapper, data_loader, loss_function, simulator, model, periods, problem_params, observation_params, train=True, ignore_periods=0, discrete_allocation=False, return_trajectory=False, collect_additional_data=False):
         """
         Do one epoch of training or testing
         """
-
-        # print(f'observation_params["normalize_observations"]: {observation_params["normalize_observations"]}')
-        # print(f'simulator.normalize_observations: {simulator.normalize_observations}')
         
         epoch_loss = 0
         epoch_loss_to_report = 0
@@ -204,14 +204,37 @@ class Trainer():
         optimizer_metrics_sum = None
         num_batches = 0
         special_metrics = {}  # New dictionary for metrics that shouldn't be averaged
+        
+        # Initialize trajectory and additional data
+        trajectory_data = None
+        additional_data = None if not collect_additional_data else {}
+        
+        # Initialize data structures for action distribution histograms
+        action_histograms = {
+            'discrete_probs': [],
+            'discrete_logits': [],
+            'pre_temp_logits': []
+        }
 
         for i, data_batch in enumerate(data_loader):
             data_batch = self.move_batch_to_device(data_batch)
             
-            # Forward pass and simulation
-            total_reward, reward_to_report, trajectory_data = self.simulate_batch(
-                loss_function, simulator, model, periods, problem_params, data_batch, observation_params, ignore_periods, discrete_allocation, collect_trajectories=True
+            # Forward pass and simulation - pass train parameter
+            total_reward, reward_to_report, batch_trajectory_data, batch_additional_data, batch_action_data = self.simulate_batch(
+                loss_function, simulator, model, periods, problem_params, data_batch, observation_params, 
+                ignore_periods, discrete_allocation, collect_trajectories=True, train=train,
+                collect_additional_data=collect_additional_data
             )
+            
+            
+            # Collect action distribution data for histograms
+            if batch_action_data:
+                for key in action_histograms:
+                    if key in batch_action_data and batch_action_data[key] is not None:
+                        # Extract only the last index (order action) for each sample
+                        # Assuming the shape is [batch_size, num_actions]
+                        order_action_data = batch_action_data[key][:, 0, -1]  # Get last index for each sample
+                        action_histograms[key].append(order_action_data)
             
             # Always accumulate simulator metrics
             epoch_loss += total_reward.item()
@@ -219,21 +242,34 @@ class Trainer():
             
             # If training, get optimizer metrics but don't use them for loss tracking
             if train and model.trainable:
-                batch_metrics = optimizer_wrapper.optimize(trajectory_data)
+                batch_metrics = optimizer_wrapper.optimize(batch_trajectory_data)
                 
-                # Handle special metrics (like gradients) that shouldn't be averaged
+                # Handle special metrics (like histograms) that shouldn't be averaged
                 for k, v in batch_metrics.items():
-                    if 'grad_analysis' in k:
+                    if 'histogram' in k or isinstance(v, wandb.Histogram):
                         special_metrics[k] = v  # Store without averaging
                         continue
                         
-                if optimizer_metrics_sum is None:
-                    optimizer_metrics_sum = {k: v for k, v in batch_metrics.items() if 'grad_analysis' not in k}
-                else:
-                    for k, v in batch_metrics.items():
-                        if 'grad_analysis' not in k:
-                            optimizer_metrics_sum[k] += v
-                num_batches += 1
+                    if optimizer_metrics_sum is None:
+                        optimizer_metrics_sum = {k: v for k, v in batch_metrics.items() 
+                                               if 'histogram' not in k and not isinstance(v, wandb.Histogram)}
+                    else:
+                        for k, v in batch_metrics.items():
+                            if 'histogram' not in k and not isinstance(v, wandb.Histogram):
+                                optimizer_metrics_sum[k] += v
+                    num_batches += 1
+            
+            # Store trajectory data for the first batch only
+            if return_trajectory and trajectory_data is None:
+                trajectory_data = batch_trajectory_data
+                
+            # Store additional data for the first batch only
+            if collect_additional_data and batch_additional_data is not None:
+                if additional_data is None:
+                    additional_data = {}
+                for k, v in batch_additional_data.items():
+                    if k not in additional_data:
+                        additional_data[k] = v
 
         # Calculate average metrics using simulator results
         metrics = {
@@ -248,90 +284,90 @@ class Trainer():
                 
         # Add special metrics without averaging
         metrics.update(special_metrics)
+        
+        # Process action distribution histograms
+        for key in action_histograms:
+            if action_histograms[key]:
+                # Concatenate all tensors for this key
+                try:
+                    all_data = torch.cat(action_histograms[key], dim=0)
+                    # Create wandb histogram
+                    metrics[f'action_distribution/{key}'] = wandb.Histogram(all_data.flatten().cpu().numpy())
+                except Exception as e:
+                    print(f"Error creating histogram for {key}: {e}")
 
         if return_trajectory:
-            return metrics, trajectory_data
+            if collect_additional_data:
+                return metrics, trajectory_data, additional_data
+            else:
+                return metrics, trajectory_data, None
         else:
             return metrics
     
-    def simulate_batch(self, loss_function, simulator, model, periods, problem_params, data_batch, observation_params, ignore_periods=0, discrete_allocation=False, collect_trajectories=False):
+    def simulate_batch(self, loss_function, simulator, model, periods, problem_params, data_batch, observation_params, ignore_periods=0, discrete_allocation=False, collect_trajectories=False, train=True, collect_additional_data=False):
         """
         Simulate for an entire batch of data, across the specified number of periods.
         Collects data for both HDPO (pathwise gradients) and optionally PPO (trajectory data).
-        
-        Parameters:
-        -----------
-        ...
-        collect_trajectories: bool
-            If True, collect and return trajectory data needed for PPO.
-            If False, return None for trajectory_data to save memory.
         """
         # Initialize rewards
         batch_reward = 0
         reward_to_report = 0
 
         # Get observation keys from value network config if it exists
-        observation_keys = None
-        if hasattr(model, 'value_net') and model.value_net is not None:
-            observation_keys = model.value_net.observation_keys
+        observation_keys = self._get_observation_keys(model)
 
-        # Initialize trajectory storage only if needed
-        trajectory_data = None
-        if collect_trajectories:
-            trajectory_data = {
-                'observations': [], # observations at each time step
-                'rewards': [], # rewards at each time step
-                'actions': [], # one action per sub-range
-                'total_actions': [], # total one-dimensional action
-                'logits': [], # logits per sub-range
-                'values': [], # value of the state
-                'terminated': []
-            }
+        # Initialize data collection structures
+        trajectory_data = self._initialize_trajectory_data(collect_trajectories)
+        additional_data = self._initialize_additional_data(collect_additional_data)
+        
+        # Initialize action distribution data collection
+        action_data = {
+            'discrete_probs': None,
+            'discrete_logits': None,
+            'pre_temp_logits': None
+        }
 
+        # Reset simulator
         observation, _ = simulator.reset(periods, problem_params, data_batch, observation_params)
-        # # set a fixed seed for debugging
-        # torch.manual_seed(0)
-        # np.random.seed(0)
         
         for t in range(periods):
             # Store observation if collecting trajectories
             vectorized_obs = self.vectorize_observation(observation, observation_keys)
-            # if vectorized_obs is not None:
-            #     trajectory_data['observations'].append(vectorized_obs.detach().clone())
 
             # Add internal data to observation
-            observation_and_internal_data = {k: v for k, v in observation.items()}
-            observation_and_internal_data['internal_data'] = simulator._internal_data
+            observation_and_internal_data = self._prepare_observation_with_internal_data(observation, simulator)
 
             # Sample action and get policy outputs
-            model_output = model(observation_and_internal_data)
+            model_output = model(observation_and_internal_data, train=train)
             action_dict = model_output.get('action_dict')
+            raw_outputs = model_output.get('raw_outputs', {})
             value = model_output.get('value', None)
+            
+            # Collect action distribution data (only from the last period)
+            if t == periods - 1:
+                if 'discrete_probs' in action_dict:
+                    action_data['discrete_probs'] = action_dict['discrete_probs'].detach().clone()
+                if 'discrete' in raw_outputs:
+                    action_data['discrete_logits'] = raw_outputs['discrete'].detach().clone()
+                if 'pre_temp_discrete_logits' in raw_outputs:
+                    action_data['pre_temp_logits'] = raw_outputs['pre_temp_discrete_logits'].detach().clone()
+            
+            # Collect additional data if requested
+            if collect_additional_data:
+                self._collect_additional_data(additional_data, model_output, action_dict)
 
+            # Apply discrete allocation if needed
             if discrete_allocation:
-                action_dict = {key: val.round() for key, val in action_dict.items()}            
+                action_dict = self._apply_discrete_allocation(action_dict)
 
             # Execute environment step
             next_observation, reward, terminated, _, _ = simulator.step(observation, action_dict)
             total_reward = loss_function(None, action_dict, reward)
 
-            # Store trajectory data with proper detaching and cloning
+            # Collect trajectory data if requested
             if collect_trajectories:
-                if vectorized_obs is not None:
-                    trajectory_data['observations'].append(vectorized_obs.clone())
-                trajectory_data['actions'].append(action_dict['discrete_actions'].detach().clone())
-                trajectory_data['total_actions'].append(action_dict['feature_actions']['total_action'].detach().clone())
-                trajectory_data['logits'].append(action_dict['action_logits'].detach().clone())
-                if value is not None:
-                    trajectory_data['values'].append(value.detach().clone())
-                trajectory_data['rewards'].append(reward.clone())
-                trajectory_data['terminated'].append(torch.tensor(terminated).detach().clone())
+                self._collect_trajectory_data(trajectory_data, vectorized_obs, action_dict, value, reward, terminated)
 
-            #     # print [-1][0] of every list in trajectory_data
-            #     for key, value in trajectory_data.items():
-            #         if key != 'terminated':
-            #             print(f'{key}: {value[-1][0]}')
-            # print()
             # Update running rewards
             batch_reward += total_reward
             if t >= ignore_periods:
@@ -343,24 +379,132 @@ class Trainer():
             if terminated:
                 break
 
-        # Convert trajectory lists to tensors with additional debugging
-        if collect_trajectories:
-            trajectory_data = {
-                k: torch.stack(v) if v[0] is not None else None 
-                for k, v in trajectory_data.items()
-            }
-
-        # print the shape of the trajectory data
-        # print(f'trajectory_data["observations"].shape: {trajectory_data["observations"].shape}')
-        # print(f'trajectory_data["actions"].shape: {trajectory_data["actions"].shape}')
-        # print(f'trajectory_data["logits"].shape: {trajectory_data["logits"].shape}')
-        # print(f'trajectory_data["values"].shape: {trajectory_data["values"].shape}')
-        # print(f'trajectory_data["rewards"].shape: {trajectory_data["rewards"].shape}')
-        # print(f'trajectory_data["terminated"].shape: {trajectory_data["terminated"].shape}')
+        # Process collected data
+        trajectory_data = self._process_trajectory_data(trajectory_data, collect_trajectories)
+        additional_data = self._process_additional_data(additional_data, collect_additional_data)
         
-        trajectory_data['next_observation'] = observation
+        # Add final observation to trajectory data
+        if collect_trajectories and trajectory_data is not None:
+            trajectory_data['next_observation'] = observation
 
-        return batch_reward, reward_to_report, trajectory_data
+        return batch_reward, reward_to_report, trajectory_data, additional_data, action_data
+
+    def _get_observation_keys(self, model):
+        """Extract observation keys from model if available"""
+        if hasattr(model, 'value_net') and model.value_net is not None:
+            return model.value_net.observation_keys
+        return None
+
+    def _initialize_trajectory_data(self, collect_trajectories):
+        """Initialize trajectory data structure if needed"""
+        if not collect_trajectories:
+            return None
+        
+        return {
+            'observations': [],      # observations at each time step
+            'rewards': [],           # rewards at each time step
+            'discrete_action_indices': [],  # one action per sub-range
+            'total_action': [],      # total one-dimensional action
+            'logits': [],            # logits for the selected sub-range
+            'values': [],            # value of the state
+            'terminated': []         # termination flags
+        }
+
+    def _initialize_additional_data(self, collect_additional_data):
+        """Initialize additional data structure if needed"""
+        if not collect_additional_data:
+            return None
+        
+        return {}
+
+    def _prepare_observation_with_internal_data(self, observation, simulator):
+        """Add internal data to observation"""
+        observation_and_internal_data = {k: v for k, v in observation.items()}
+        observation_and_internal_data['internal_data'] = simulator._internal_data
+        return observation_and_internal_data
+
+    def _collect_additional_data(self, additional_data, model_output, action_dict):
+        """Collect additional data from model outputs and action dictionary"""
+        # Store raw outputs from model
+        if 'raw_outputs' in model_output:
+            raw_outputs = model_output['raw_outputs']
+            for key, value in raw_outputs.items():
+                if value is not None:
+                    if key not in additional_data:
+                        additional_data[key] = []
+                    additional_data[key].append(value.detach().clone())
+        
+        # Store continuous values from action_dict if they exist
+        if 'continuous_values' in action_dict:
+            if 'continuous_values' not in additional_data:
+                additional_data['continuous_values'] = []
+            additional_data['continuous_values'].append(action_dict['continuous_values'].detach().clone())
+
+    def _apply_discrete_allocation(self, action_dict):
+        """Apply discrete allocation by rounding action values"""
+        return {key: val.round() for key, val in action_dict.items()}
+
+    def _collect_trajectory_data(self, trajectory_data, vectorized_obs, action_dict, value, reward, terminated):
+        """Collect trajectory data for the current step"""
+        if vectorized_obs is not None:
+            trajectory_data['observations'].append(vectorized_obs.clone())
+        
+        # Only append fields that exist and are not None
+        if 'discrete_action_indices' in action_dict and action_dict['discrete_action_indices'] is not None:
+            trajectory_data['discrete_action_indices'].append(action_dict['discrete_action_indices'].detach().clone())
+        
+        if 'feature_actions' in action_dict and 'total_action' in action_dict['feature_actions']:
+            trajectory_data['total_action'].append(action_dict['feature_actions']['total_action'].detach().clone())
+        
+        # Handle logits - check if they exist and are not None
+        if 'logits' in action_dict and action_dict['logits'] is not None:
+            if 'logits' not in trajectory_data:
+                trajectory_data['logits'] = []
+            trajectory_data['logits'].append(action_dict['logits'].detach().clone())
+        else:
+            # For agents that don't use logits (like ContinuousOnly), add a dummy tensor or None
+            if 'logits' not in trajectory_data:
+                trajectory_data['logits'] = []
+            trajectory_data['logits'].append(None)
+        
+        if value is not None:
+            trajectory_data['values'].append(value.detach().clone())
+        
+        trajectory_data['rewards'].append(reward.clone())
+        trajectory_data['terminated'].append(torch.tensor(terminated).detach().clone())
+        
+        # Save raw_continuous_samples if they exist (for GaussianPPOAgent)
+        if 'raw_continuous_samples' in action_dict:
+            if 'raw_continuous_samples' not in trajectory_data:
+                trajectory_data['raw_continuous_samples'] = []
+            trajectory_data['raw_continuous_samples'].append(action_dict['raw_continuous_samples'].detach().clone())
+
+    def _process_trajectory_data(self, trajectory_data, collect_trajectories):
+        """Process collected trajectory data into tensors"""
+        if not collect_trajectories or trajectory_data is None:
+            return trajectory_data
+        
+        processed_data = {}
+        for k, v in trajectory_data.items():
+            if not v:
+                processed_data[k] = None
+            elif v[0] is None:
+                # Handle lists containing None values
+                processed_data[k] = None
+            else:
+                processed_data[k] = torch.stack(v)
+        
+        return processed_data
+
+    def _process_additional_data(self, additional_data, collect_additional_data):
+        """Process collected additional data into tensors"""
+        if not collect_additional_data or additional_data is None:
+            return additional_data
+        
+        return {
+            k: torch.stack(v) if v and v[0] is not None else None 
+            for k, v in additional_data.items()
+        }
 
     def save_model(self, epoch, model, optimizer, trainer_params):
         path = self.create_many_folders_if_not_exist_and_return_path(
@@ -530,7 +674,7 @@ class Trainer():
             'simulator_info': simulator_info
         }
 
-    def compute_and_save_test_metrics(self, trajectory_data, model_name, folders, simulator, n_samples=100):
+    def compute_and_save_test_metrics(self, trajectory_data, additional_data, model_name, folders, simulator, n_samples=100):
         """
         Compute and save specific metrics for a random subset of test trajectories
         """
@@ -549,46 +693,69 @@ class Trainer():
         
         # Select the samples for each tensor
         selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
-        selected_actions = trajectory_data["actions"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
-        selected_total_actions = trajectory_data["total_actions"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+        selected_discrete_action_indices = trajectory_data["discrete_action_indices"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+        selected_total_action = trajectory_data["total_action"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+        
+        # Select additional data if available
+        selected_additional_data = {}
+        if additional_data:
+            for key, tensor in additional_data.items():
+                if tensor is not None:
+                    selected_additional_data[key] = tensor[:, random_batch_indices]
         
         # if we are normalizing the inventory, we need to unnormalize selected_inventories
         if simulator.normalize_observations:
             selected_inventories = selected_inventories * simulator.inventory_std + simulator.inventory_mean
         
-        # Now reshape the selected samples
-        selected_inventories = selected_inventories.reshape(-1, selected_inventories.shape[-1])  # Shape: [T*n_samples, F]
-        selected_actions = selected_actions.reshape(-1, selected_actions.shape[-1])  # Shape: [T*n_samples, 1]
-        selected_total_actions = selected_total_actions.reshape(-1, selected_total_actions.shape[-1])  # Shape: [T*n_samples, 1]
-
-        # # print the first 10 rows of the selected_inventories
-        # print(f'selected_inventories shape: {selected_inventories.shape}')
-        # print(f'selected_inventories: {selected_inventories[:10]}')
-        
-        # Sum across features for inventories
-        inventory_sums = selected_inventories.sum(dim=1)  # Shape: [T*n_samples]
-        action_sums = selected_actions.sum(dim=1)  # Shape: [T*n_samples]
-        total_action_sums = selected_total_actions.sum(dim=1)  # Shape: [T*n_samples]
-
-        
         # Create DataFrame
         all_data = []
-        for idx in range(len(inventory_sums)):
-            all_data.append({
-                'time_step': idx // n_samples,
-                'batch_idx': random_batch_indices[idx % n_samples].item(),
-                'idx': idx,
-                'inventory_sum': inventory_sums[idx].item(),
-                'inventory_on_hand': selected_inventories[idx][0].item(),
-                'action': selected_actions[idx].item(),
-                'action_sum': action_sums[idx].item(),
-                'total_action_sum': total_action_sums[idx].item()
-            })
         
+        # Loop through time steps and batch samples
+        for t in range(T):
+            for b_idx, b in enumerate(random_batch_indices[:n_samples]):
+                # Get inventory and action data
+                inventory = selected_inventories[t, b_idx].detach().cpu().numpy()
+                discrete_action_idx = selected_discrete_action_indices[t, b_idx, 0].item()
+                total_action = selected_total_action[t, b_idx, 0].item()
+                
+                # Create base record
+                record = {
+                    'time_step': t,
+                    'batch_idx': b.item(),
+                    'inventory_on_hand': inventory[0],
+                    'inventory_sum': inventory.sum(),
+                    'discrete_action_index': discrete_action_idx,
+                    'total_action': total_action
+                }
+                
+                # Add additional data as tuples
+                for key, tensor in selected_additional_data.items():
+                    # For a single store problem, we can just take the first store
+                    # Shape is typically [T, n_samples, stores, features]
+                    # We want to extract [t, b_idx, 0, :] and convert to tuple
+                    try:
+                        # Try to access the first store dimension (index 0)
+                        # This works for tensors with shape [T, B, stores, features]
+                        data_array = tensor[t, b_idx, 0].detach().cpu().numpy()
+                    except IndexError:
+                        # If that fails, the tensor might not have a store dimension
+                        # Try without the store dimension
+                        try:
+                            data_array = tensor[t, b_idx].detach().cpu().numpy()
+                        except IndexError:
+                            # If that also fails, skip this tensor
+                            continue
+                    
+                    # Convert to tuple and add to record
+                    record[key] = tuple(data_array.flatten())
+                
+                all_data.append(record)
+        
+        # Create DataFrame
         df = pd.DataFrame(all_data)
         
         # Save as CSV
-        csv_path = f"{path}/{model_name}_test_metrics.csv"
+        csv_path = f"{path}/{model_name}_test_data.csv"
         df.to_csv(csv_path, index=False)
-        print(f"Saved test metrics to {csv_path}")
+        print(f"Saved test data to {csv_path}")
 

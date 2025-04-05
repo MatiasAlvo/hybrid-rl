@@ -22,6 +22,12 @@ from src.algorithms.common.policies.policy import PolicyNetwork
 from src.algorithms.hdpo.losses.loss import PolicyLoss
 from src.algorithms.hdpo.agents.hdpo_agent import HDPOAgent  # Ensure HDPOAgent is imported correctly
 from src.algorithms.hybrid.agents.hybrid_agent import HybridAgent  # Ensure HybridAgent is imported correctly
+from src.algorithms.hybrid.agents.hybrid_agent import (
+    GaussianPPOAgent, 
+    GumbelSoftmaxAgent, 
+    ContinuousOnlyAgent,
+    FactoredGaussianPPOAgent
+)
 
 # Data handling imports
 from src.data.data_handling import DatasetCreator, Dataset, Scenario
@@ -93,6 +99,7 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     trainer_params = config.hyperparams_config['trainer_params']
     optimizer_params = config.hyperparams_config['optimizer_params']
     nn_params = config.hyperparams_config['nn_params']
+    agent_params = config.hyperparams_config['agent_params']
 
     feature_registry = None
     # Initialize range manager if this is a hybrid problem
@@ -174,14 +181,35 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     agent_config = {
         'scenario': scenario,
         'nn_params': nn_params,
+        'agent_params': agent_params
     }
 
-    # Add right before model creation:
+    # Define agent mapping
+    agent_mapping = {
+        'hybrid': HybridAgent,
+        'gaussian_ppo': GaussianPPOAgent,
+        'gumbel_softmax': GumbelSoftmaxAgent,
+        'continuous_only': ContinuousOnlyAgent,
+        'factored_gaussian_ppo': FactoredGaussianPPOAgent
+    }
+
+    # Get agent type from config, default to 'hybrid' if not specified
+    agent_type = hyperparams_config.get('agent_params', {}).get('agent_type', 'hybrid')
+    
+    # Print agent type being used
+    print(f"Creating model with agent type: {agent_type}")
     print(f"Creating model with policy: {nn_params['policy_network']['name']}")
+    
+    # Create the appropriate agent
     if feature_registry:
-        model = HybridAgent(agent_config, feature_registry, device=device)
-        print(f"Created model with policy class: {type(model.policy).__name__}")
+        if agent_type in agent_mapping:
+            model = agent_mapping[agent_type](agent_config, feature_registry, device=device)
+            print(f"Created model with agent class: {type(model).__name__}")
+        else:
+            print(f"Warning: Unknown agent type '{agent_type}', defaulting to HybridAgent")
+            model = HybridAgent(agent_config, feature_registry, device=device)
     else:
+        # For non-hybrid problems, use HDPOAgent
         model = HDPOAgent(agent_config, device=device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=optimizer_params['learning_rate'], eps=1e-5)

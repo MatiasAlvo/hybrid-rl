@@ -34,6 +34,8 @@ problem_params:
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
+      # 'thresholds': [0.0, 5.0, 62.0]  # first and last values are the same across all discrete features
+      # 'thresholds': [-5.0, 0.0, 62.0]  # first and last values are the same across all discrete features
       'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
       'values': [0.0, 64.0]
       # 'thresholds': [-0.0001, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]  # first and last values are the same across all discrete features
