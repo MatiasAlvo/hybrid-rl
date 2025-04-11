@@ -1,5 +1,5 @@
 trainer_params:
-  'epochs': 200
+  'epochs': 150
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -13,7 +13,7 @@ trainer_params:
   'compute_metrics_on_test': true
 
 logging_params: 
-  'use_wandb': true
+  'use_wandb': false
   'use_tensorboard': false
   'wandb_project_name': "inventory_control"
   'wandb_entity': "alvomatias"
@@ -23,8 +23,10 @@ logging_params:
 
 agent_params:
   # 'agent_type': 'hybrid_agent'
+  # 'agent_type': 'factored_gumbel_softmax'
   # 'agent_type': 'gaussian_ppo'
   'agent_type': 'factored_gaussian_ppo'
+  # 'agent_type': 'factored_hybrid'
   'fixed_std': true  # Set to true to use state-independent standard deviation
   'initial_temperature': 1.0
   'min_temperature': 0.001
@@ -33,7 +35,6 @@ agent_params:
   'add_gumbel_noise': false
   'zero_out_action_dim': []
   # 'zero_out_action_dim': [0]
-
 
 optimizer_params:
   # 'learning_rate': 0.001

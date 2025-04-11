@@ -25,8 +25,10 @@ from src.algorithms.hybrid.agents.hybrid_agent import HybridAgent  # Ensure Hybr
 from src.algorithms.hybrid.agents.hybrid_agent import (
     GaussianPPOAgent, 
     GumbelSoftmaxAgent, 
+    FactoredGumbelSoftmaxAgent,
     ContinuousOnlyAgent,
-    FactoredGaussianPPOAgent
+    FactoredGaussianPPOAgent,
+    FactoredHybridAgent
 )
 
 # Data handling imports
@@ -189,8 +191,10 @@ def run_training(setting_config, hyperparams_config, mode='both'):
         'hybrid': HybridAgent,
         'gaussian_ppo': GaussianPPOAgent,
         'gumbel_softmax': GumbelSoftmaxAgent,
+        'factored_gumbel_softmax': FactoredGumbelSoftmaxAgent,
         'continuous_only': ContinuousOnlyAgent,
-        'factored_gaussian_ppo': FactoredGaussianPPOAgent
+        'factored_gaussian_ppo': FactoredGaussianPPOAgent,
+        'factored_hybrid': FactoredHybridAgent
     }
 
     # Get agent type from config, default to 'hybrid' if not specified

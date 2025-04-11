@@ -1,0 +1,62 @@
+# Gaussian PPO Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/gaussian_ppo.yml'
+
+method: 'random'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  anneal_lr:
+    values:
+      - true
+      - false
+  buffer_periods:
+    values:
+      - 50
+  clip_coef:
+    distribution: uniform
+    max: 0.2
+    min: 0.1
+  gae_lambda:
+    distribution: uniform
+    max: 0.97
+    min: 0.95
+  gamma:
+    distribution: uniform
+    max: 0.95
+    min: 0.92
+  learning_rate:
+    distribution: log_uniform_values
+    max: 1e-03
+    min: 1e-04
+  max_grad_norm:
+    distribution: uniform
+    max: 10
+    min: 5
+  normalize_advantages:
+    values:
+      - true
+  normalize_observations:
+    values:
+      - false
+  num_epochs:
+    values:
+      - 5
+  policy_activation:
+    values:
+      - Tanh
+  reward_scaling:
+    values:
+      - true
+  use_gae:
+    values:
+      - true
+  value_activation:
+    values:
+      - Tanh
+  value_function_coef:
+    distribution: log_uniform_values
+    max: 0.2
+    min: 0.1 

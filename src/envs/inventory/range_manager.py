@@ -285,8 +285,8 @@ class RangeManager:
                 # Sum over the sub-ranges that correspond to this range
                 # (this correspondence was pre-computed in _precompute_feature_range_mappings)
                 sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
-                feature_action[..., range_idx] = torch.clamp(torch.sum(sub_actions, dim=-1, keepdim=False), min=0)
-                # feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
+                # feature_action[..., range_idx] = torch.clamp(torch.sum(sub_actions, dim=-1, keepdim=False), min=0)
+                feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
                 feature_discrete[..., range_idx] = torch.sum(discrete_probs[..., sub_range_indices], dim=-1, keepdim=False)
             feature_actions[feature_name] = {
                 'action': feature_action,  # Shape: [batch_size, n_stores, n_feature_ranges] (represents the action for each range)
@@ -294,7 +294,7 @@ class RangeManager:
                 'values': mapping['values']
             }
         
-        feature_actions['total_action'] = self.compute_total_action(discrete_probs, continuous_values, non_negative=True)
+        feature_actions['total_action'] = self.compute_total_action(discrete_probs, continuous_values, non_negative=False)
         
         return feature_actions
 

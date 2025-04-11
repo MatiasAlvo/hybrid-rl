@@ -1,0 +1,57 @@
+trainer_params:
+  'epochs': 150
+  'do_dev_every_n_epochs': 1
+  'print_results_every_n_epochs': 1
+  'save_model': false
+  'epochs_between_save': 1
+  'choose_best_model_on': 'dev_loss'
+  'load_previous_model': false
+  'load_model_path': 'models/saved_models/2025_02_14/one_store_fixed_costs/hybrid_policy_ss/1739538467.pt'
+  'base_dir': 'models/saved_models'
+  'compute_metrics_on_test': true
+
+logging_params: 
+  'use_wandb': true
+  'use_tensorboard': false
+  'wandb_project_name': "inventory_control"
+  'wandb_entity': "alvomatias"
+  'exp_name': "continuous_only"
+  'env_name': "inventory"
+  'setting_name': "one_store_fixed_costs"
+
+agent_params:
+  'agent_type': 'continuous_only'
+  'initial_temperature': 1.0
+  'min_temperature': 0.001
+  'temperature_decay': 1.0
+  'use_straight_through': false
+  'add_gumbel_noise': false
+
+optimizer_params:
+  'learning_rate': 0.00015
+  'anneal_lr': true
+  'weight_decay': 0.0
+  'gradient_clip': 1.0
+  'ppo_params':
+    'num_epochs': 1
+
+nn_params:
+  policy_network:
+    name: 'hybrid_policy'
+    input_size: 2
+    hidden_layers: [64, 64]
+    activation: 'Tanh'
+    dropout: 0.0
+    batch_norm: false
+    heads:
+      discrete:
+        enabled: true
+        size: 0 # override in range manager
+        activation: 'Linear'
+      continuous:
+        enabled: true
+        size: 0 # override in range manager
+        activation: 'Linear'
+
+  value_network:
+    enabled: false

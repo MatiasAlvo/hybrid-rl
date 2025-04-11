@@ -189,21 +189,40 @@ def test_comparison(test_cases):
 h = 1    # holding cost
 p = 9    # penalty cost
 # K = 30   # fixed ordering cost
-K = 64   # fixed ordering cost (64 is the value used in Veinott, also in Zheng though they report it incorrectly as 24)
+# K = 30   # fixed ordering cost (64 is the value used in Veinott, also in Zheng though they report it incorrectly as 24)
 lambd = 10  # demand rate
 L = 2   # lead time
 s = 26
 S = 62
 
-print(simulate_inventory(p, h, lambd, K, s, S, L))
-print(c(s, S, h, p, lambd, K, L))
+# K = 30
+# Average Cost: 27.15
+# K = 40
+# Average Cost: 30.42
+# K = 50
+# Average Cost: 33.36
+# K = 60
+# Average Cost: 36.05
+# K = 64
+# Average Cost: 37.06
+# K = 70
+# Average Cost: 38.51
+# K = 80
+# Average Cost: 40.83
 
-s_star, S_star, c_star = find_optimal_policy(h, p, lambd, K, L)
-print(f"Optimal policy: s* = {s_star}, S* = {S_star}")
-print(f"Average Cost: {c_star:.2f}")
+for K in [30, 40, 50, 60, 64, 70, 80]:
+    print(f"K = {K}")
+    # print(c(s, S, h, p, lambd, K, L))
 
+    s_star, S_star, c_star = find_optimal_policy(h, p, lambd, K, L)
+    # print(f"Optimal policy: s* = {s_star}, S* = {S_star}")
+    print(f"Average Cost: {c_star:.2f}")
+    cost_check = simulate_inventory(p, h, lambd, K, s, S, L)
+    # if difference is too large, print the difference
+    if abs(cost_check - c_star)/c_star > 0.1:
+        print(f"Difference: {cost_check - c_star:.2f}")
+    print()
 
-# Define test cases covering different scenarios
 test_cases = [
     # h, p, lambd, K, s, S, L
     (1, 9, 10, 64, 6, 40, 0),  # Base case from paper

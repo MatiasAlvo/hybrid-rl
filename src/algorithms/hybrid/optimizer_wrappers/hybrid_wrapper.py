@@ -416,6 +416,8 @@ class HybridWrapper(BaseOptimizerWrapper):
         if required_losses['policy_gradient'] and newlogits is not None:
             # Compute log ratio and ratio for PPO
             logratio = newlogits - mb_data['logits']
+            if newlogits.shape[0] != mb_data['logits'].shape[0] or newlogits.shape[1] != mb_data['logits'].shape[1]:
+                raise ValueError("Log ratio shape mismatch. shapes: ", newlogits.shape, mb_data['logits'].shape)
             # logratio = newlogits - mb_data['logits'].unsqueeze(-1) # change March 18
             logratio = torch.clamp(logratio, -20, 20)
             ratio = torch.exp(logratio)

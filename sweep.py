@@ -124,6 +124,7 @@ def train_sweep(sweep_config):
                 'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
                 # Add mapping for threshold parameter
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
+                'fixed_cost': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'values', 1]),
             }
             
             # Update configs based on sweep parameters from run.config
@@ -195,8 +196,20 @@ def flatten_dict(d, parent_key='', sep='.'):
             items.append((new_key, v))
     return dict(items)
 
-def create_sweep_config(config_files):
-    """Create sweep configuration with all hyperparameters from config files."""
+def create_sweep_config(agent_sweep_file, setting_sweep_file):
+    """Create sweep configuration by merging agent and setting sweep configs."""
+    # Load the sweep configs
+    with open(agent_sweep_file, 'r') as file:
+        agent_sweep_config = yaml.safe_load(file)
+    with open(setting_sweep_file, 'r') as file:
+        setting_sweep_config = yaml.safe_load(file)
+    
+    # Get the config files from the sweep configs
+    config_files = {
+        'setting': setting_sweep_config.get('config_files', {}).get('setting'),
+        'hyperparams': agent_sweep_config.get('config_files', {}).get('hyperparams')
+    }
+    
     # Load the full configs
     with open(config_files['setting'], 'r') as file:
         setting_config = yaml.safe_load(file)
@@ -205,133 +218,15 @@ def create_sweep_config(config_files):
     
     # Create base sweep config
     sweep_config = {
-        'method': 'random',
-        'metric': {
+        'method': agent_sweep_config.get('method', 'random'),
+        'metric': agent_sweep_config.get('metric', {
             'name': 'dev/loss/best',
             'goal': 'minimize'
-        },
+        }),
         'parameters': {
             'config_files': {
                 'value': config_files
             },
-            # Original parameters
-            'learning_rate': {
-                'distribution': 'log_uniform_values',
-                'min': 1e-5,
-                # 'min': 1e-4,
-                'max': 1e-2
-                # 'max': 1e-3
-            },
-            'anneal_lr': {
-                # 'values': [True]
-                'values': [True, False]
-            },
-            'num_epochs': {
-                # 'values': [5]
-                'values': [3, 5, 10]
-            },
-            'value_function_coef': {
-                'distribution': 'log_uniform_values',
-                'min': 0.1,
-                'max': 10.0
-                # 'max': 0.2
-            },
-            'gamma': {
-                'distribution': 'uniform',
-                'min': 0.9,
-                # 'min': 0.92,
-                'max': 0.99
-                # 'max': 0.95
-            },
-            'gae_lambda': {
-                'distribution': 'uniform',
-                'min': 0.9,
-                # 'min': 0.95,
-                'max': 0.99
-                # 'max': 0.97
-            },
-            'clip_coef': {
-                'distribution': 'uniform',
-                'min': 0.1,
-                'max': 0.3
-                # 'max': 0.2
-            },
-            # New parameters
-            'policy_activation': {
-                # 'values': ['Tanh'] # well-performing for HybridAgent
-                # 'values': ['ELU']
-                'values': ['Tanh', 'ReLU', 'ELU']
-            },
-            'value_activation': {
-                # 'values': ['Tanh'] # well-performing for HybridAgent
-                # 'values': ['ELU']
-                'values': ['Tanh', 'ReLU', 'ELU']
-            },
-            'normalize_advantages': {
-                # 'values': [True]
-                'values': [False, True]
-            },
-            'use_gae': {
-                # 'values': [True]
-                'values': [True, False]
-            },
-            'normalize_observations': {
-                'values': [False, True]
-                # 'values': [False]
-            },
-            'reward_scaling': {
-                # 'values': [True]
-                'values': [False, True]
-            },
-            'buffer_periods': {
-                # 'values': [50]  # Adjust range as needed
-                'values': [0, 20, 50]  # Adjust range as needed
-            },
-            'pathwise_coef': {
-                'distribution': 'uniform',
-                'min': 8.0,
-                'max': 10.0
-            },
-            'reward_scaling_pathwise': {
-                'values': [True]
-                # 'values': [True, False]
-            },
-            'max_grad_norm': {
-                'distribution': 'uniform',
-                'min': 5.0,
-                'max': 10.0
-            },
-            # Gumbel-Softmax parameters
-            'initial_temperature': {
-                'distribution': 'log_uniform_values',
-                'min': 1.0,
-                'max': 10.0
-            },
-            'min_temperature': {
-                'distribution': 'log_uniform_values',
-                'min': 0.001,
-                'max': 0.2
-            },
-            'temperature_decay': {
-                # 'values': [1.0]
-                'distribution': 'uniform',
-                'min': 0.97,
-                'max': 0.995
-            },
-            'use_straight_through': {
-                # 'values': [True, False]  # Try both options
-                'values': [False]  # Try both options
-            },
-            'add_gumbel_noise': {
-                'values': [False]  # Try both options
-                # 'values': [True, False]  # Try both options
-            },
-            # # Add new parameter for threshold sweep
-            # 'fixed_ordering_cost_threshold': {
-            #     'distribution': 'uniform',
-            #     'min': 0.0,
-            #     'max': 30.0
-            # },
             # Store complete original configs
             'setting_config': {
                 'value': setting_config
@@ -342,6 +237,15 @@ def create_sweep_config(config_files):
         }
     }
     
+    # Merge parameters from both sweep configs
+    for param_name, param_config in agent_sweep_config.get('parameters', {}).items():
+        if param_name not in ['config_files', 'setting_config', 'hyperparams_config']:
+            sweep_config['parameters'][param_name] = param_config
+            
+    for param_name, param_config in setting_sweep_config.get('parameters', {}).items():
+        if param_name not in ['config_files', 'setting_config', 'hyperparams_config']:
+            sweep_config['parameters'][param_name] = param_config
+    
     return sweep_config
 
 if __name__ == "__main__":
@@ -351,16 +255,15 @@ if __name__ == "__main__":
     parser.add_argument('--agent', action='store_true', help='Run sweep agent(s)')
     parser.add_argument('--count', type=int, default=1, help='Number of runs per GPU')
     parser.add_argument('--gpus', nargs='+', type=int, required=True, help='List of GPU IDs to use')
+    parser.add_argument('--agent_sweep', type=str, default='configs/sweeps/agents/hybrid.yml', 
+                        help='Agent sweep configuration file')
+    parser.add_argument('--setting_sweep', type=str, default='configs/sweeps/settings/fixed_costs.yml', 
+                        help='Setting sweep configuration file')
     args = parser.parse_args()
 
-    config_files = {
-        'setting': 'configs/settings/hybrid_general.yml',
-        'hyperparams': 'configs/policies/hybrid_general_policy.yml'
-    }
-
     if args.create:
-        # Create sweep config with all parameters
-        sweep_config = create_sweep_config(config_files)
+        # Create sweep config by merging agent and setting sweep configs
+        sweep_config = create_sweep_config(args.agent_sweep, args.setting_sweep)
         
         sweep_id = wandb.sweep(
             sweep_config, 

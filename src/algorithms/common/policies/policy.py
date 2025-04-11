@@ -691,15 +691,12 @@ class FactoredPolicy(PolicyNetwork):
         
         # Continuous network (conditioned on discrete action)
         if self.heads['continuous']['enabled']:
-            # Get discrete action size for one-hot encoding
-            discrete_size = self.heads['discrete']['size']
-            
             # Build continuous backbone with additional discrete action input
             continuous_layers = []
             
-            # First layer accepts state + one-hot discrete action
-            first_layer = self.layer_init(
-                nn.Linear(self.input_size + discrete_size, self.hidden_layers[0]),
+            # First layer uses LazyLinear since input size depends on discrete action size
+            first_layer = self.lazy_layer_init(
+                nn.LazyLinear(self.hidden_layers[0]),
                 std=2**0.5
             )
             continuous_layers.append(first_layer)
@@ -724,7 +721,7 @@ class FactoredPolicy(PolicyNetwork):
             
             # Output layer for continuous actions - just one value
             self.continuous_head = self.layer_init(
-                nn.Linear(last_hidden, 1),  # Single continuous output
+                nn.Linear(last_hidden, self.heads['continuous']['size']),
                 std=0.01  # Smaller std for policy head
             )
         
@@ -733,11 +730,10 @@ class FactoredPolicy(PolicyNetwork):
     def _build_backbone_layers(self):
         """Build a backbone network"""
         layers = []
-        prev_size = self.input_size
         
-        # First layer
-        first_layer = self.layer_init(
-            nn.Linear(self.input_size, self.hidden_layers[0]),
+        # First layer uses LazyLinear with lazy initialization
+        first_layer = self.lazy_layer_init(
+            nn.LazyLinear(self.hidden_layers[0]),
             std=2**0.5
         )
         layers.append(first_layer)
@@ -770,16 +766,18 @@ class FactoredPolicy(PolicyNetwork):
     
     def get_continuous_output(self, x, discrete_one_hot):
         """
-        Get continuous action mean conditioned on state and discrete action
-        Output is a single value per batch item, shape [batch_size, 1]
+        Get continuous mean conditioned on state and discrete action
+        
+        Args:
+            x: State tensor [batch, n_discrete, features] or [batch, features]
+            discrete_one_hot: One-hot encoded discrete action [batch, n_discrete, n_discrete] or [batch, n_discrete]
         """
+        # Concatenate along the last dimension, regardless of number of dimensions
+        combined_input = torch.cat([x, discrete_one_hot], dim=-1)
         
-        # Concatenate state with one-hot discrete action
-        combined_input = torch.cat([x, discrete_one_hot], dim=1)
-        
-        # Get features and then output (single value)
+        # Get features and then output
         features = self.continuous_net(combined_input)
-        return self.continuous_head(features)
+        return self.continuous_head(features).unsqueeze(1)
     
     def forward(self, x, process_state=True):
         """

@@ -1,0 +1,53 @@
+# Gumbel Softmax Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/gumbel_softmax.yml'
+
+method: 'random'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  add_gumbel_noise:
+    values:
+      - false
+      - true
+  anneal_lr:
+    values:
+      - true
+  buffer_periods:
+    values:
+      - 50
+  initial_temperature:
+    distribution: log_uniform_values
+    max: 10
+    min: 1
+  learning_rate:
+    distribution: log_uniform_values
+    max: 1e-02
+    min: 1e-04
+  max_grad_norm:
+    distribution: uniform
+    max: 10
+    min: 5
+  min_temperature:
+    distribution: log_uniform_values
+    max: 0.2
+    min: 0.001
+  normalize_observations:
+    values:
+      - false
+  policy_activation:
+    values:
+      - Tanh
+  reward_scaling_pathwise:
+    values:
+      - true
+  temperature_decay:
+    values:
+      - 1
+  use_straight_through:
+    values:
+      - true
+  normalize_advantages:
+    values: [True]

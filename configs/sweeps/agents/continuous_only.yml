@@ -1,0 +1,52 @@
+# Continuous Only Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/continuous_only.yml'
+
+method: 'random'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  add_gumbel_noise:
+    values:
+      - false
+  anneal_lr:
+    values:
+      - true
+      - false
+  buffer_periods:
+    values:
+      - 50
+  initial_temperature:
+    distribution: log_uniform_values
+    max: 10
+    min: 1
+  learning_rate:
+    distribution: log_uniform_values
+    max: 0.01
+    min: 1e-05
+  max_grad_norm:
+    distribution: uniform
+    max: 10
+    min: 5
+  min_temperature:
+    distribution: log_uniform_values
+    max: 0.2
+    min: 0.001
+  normalize_observations:
+    values:
+      - false
+  policy_activation:
+    values:
+      - Tanh
+  reward_scaling:
+    values:
+      - true
+  temperature_decay:
+    values:
+      - 1
+  use_straight_through:
+    values:
+      - true
+      - false 

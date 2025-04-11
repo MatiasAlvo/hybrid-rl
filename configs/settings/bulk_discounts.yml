@@ -1,0 +1,129 @@
+seeds : 
+  'underage_cost': 28 
+  'holding_cost': 73 
+  'procurement_cost': 14
+  'mean': 33
+  'coef_of_var': 92 
+  'lead_time': 41 
+  'demand': 57 
+  'initial_inventory': 4839
+
+test_seeds :  # seeds for test set
+  'underage_cost': 36 
+  'holding_cost': 81 
+  'procurement_cost': 10
+  'mean': 41 
+  'coef_of_var': 100
+  'lead_time': 49
+  'demand': 65
+  'initial_inventory': 4847
+
+sample_data_params:
+  'split_by_period': false
+  'train_periods': null
+  'dev_periods': null
+  'test_periods': null
+
+problem_params: 
+  'setting_name': "one_store_fixed_costs"
+  'n_stores': 1
+  'n_warehouses': 0
+  'n_extra_echelons': 0
+  'lost_demand': false
+  'maximize_profit': false
+  'is_hybrid': true
+  'discrete_features': 
+    'fixed_ordering_cost': 
+      # 'thresholds': [0.0, 5.0, 62.0]  # first and last values are the same across all discrete features
+      # 'thresholds': [-5.0, 0.0, 62.0]  # first and last values are the same across all discrete features
+      'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
+      'values': [0.0, 64.0]
+      # 'thresholds': [-0.0001, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]  # first and last values are the same across all discrete features
+      # 'values': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ]
+      
+      # 'thresholds': [0, 0.01, 7.0]  # first and last values are the same across all discrete features
+      # 'values': [0.0, 20.0]
+      # 'thresholds': [0, 4, 8, 12]  # first and last values are the same across all discrete features
+      # 'values': [1.0, 2.0, 3.0]
+    # 'bulk_discounts':  # Set to null to disable
+    #   'thresholds': [0, 8, 12]
+    #   'values': [0.0, 0.1]
+
+observation_params:
+  'include_warehouse_inventory': False
+  'include_static_features':
+    'holding_costs': True 
+    'underage_costs': True 
+    'procurement_costs': True 
+    'lead_times': True 
+    'upper_bounds': False
+    'mean': False
+    'std': False
+  'demand': 
+    'past_periods': 0 
+    'period_shift': 0
+  'include_past_observations':
+    'arrivals': 0
+    'orders': 0
+  'time_features_file': null
+  'time_features': null
+  'sample_features_file': null
+  'sample_features': null
+  'normalize_observations': false
+
+store_params: 
+  'demand': 
+    'distribution': 'poisson'
+    'mean': 10.0
+    # 'mean': 5.0
+    'sample_across_stores': False
+    'expand': False
+    'clip': False
+    'decimals': 3
+  'lead_time': 
+    'value': 2
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+  'holding_cost': 
+    'value': 1.0
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+  'underage_cost': 
+    'value': 9.0
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+  'initial_inventory': 
+    'sample': False
+    'inventory_periods': 2
+  'procurement_cost':
+    'value': 0.0
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+
+warehouse_params: 
+  'holding_cost': 0.3
+  'lead_time': 4
+
+echelon_params: 
+  null
+
+params_by_dataset : 
+  'train': 
+    'n_samples': 1024 
+    'batch_size': 128  # Values tested: 1024, 8192
+    'periods': 200 
+    'ignore_periods': 16 
+  'dev': 
+    'n_samples': 1024 
+    'batch_size': 128 
+    'periods': 200 
+    'ignore_periods': 16 
+  'test': 
+    'n_samples': 1024 
+    'batch_size': 128 
+    'periods': 200
+    'ignore_periods': 16

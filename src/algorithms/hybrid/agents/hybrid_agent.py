@@ -93,6 +93,34 @@ class BaseAgent(nn.Module):
             return self.temperature
         return None
 
+    def _init_factored_policy(self, config, continuous_size=None):
+        """Initialize a factored policy network with separate discrete and continuous heads
+        
+        Args:
+            config: Configuration dictionary
+            continuous_size: Size of continuous head output. If None, defaults to 1.
+        
+        Returns:
+            Initialized factored policy network
+        """
+        # Get network dimensions from feature registry
+        network_dims = self.feature_registry.get_network_dimensions()
+        
+        # Update config
+        policy_params = config['nn_params']
+        policy_params['policy_network']['input_size'] = network_dims['input_size']
+        policy_params['policy_network']['heads']['discrete']['size'] = network_dims['n_discrete']
+        
+        # For continuous head, we only output a single value (not per discrete action)
+        # unless specified otherwise
+        policy_params['policy_network']['heads']['continuous']['size'] = (
+            continuous_size if continuous_size is not None else 1
+        )
+        
+        # Create new policy network from the FactoredPolicy class
+        policy_class = NeuralNetworkCreator().get_architecture("factored_policy")
+        return policy_class(policy_params, device=self.device)
+
 
 class HybridAgent(BaseAgent):
     """
@@ -193,6 +221,97 @@ class HybridAgent(BaseAgent):
             'entropy': True            # For exploration
         }
 
+class FactoredHybridAgent(HybridAgent):
+    """
+    Factored hybrid agent with:
+    - Discrete actions: score-function gradient (PPO)
+    - Continuous actions: pathwise gradients
+    - Requires value network for PPO
+    """
+    def __init__(self, config, feature_registry=None, device='cpu'):
+        # Set flag to identify this as a factored agent
+        self.factored = True
+        self.device = device
+        super().__init__(config, feature_registry, device)
+    
+    def _init_policy(self, config):
+        """Initialize policy with separate discrete and continuous networks"""
+        return self._init_factored_policy(config)
+
+    def forward(self, observation, train=True, process_state=True):
+        """Forward pass: first sample discrete action, then get continuous mean"""
+        # Process observation to get features if needed
+        if process_state:
+            processed_obs = observation['store_inventories'].flatten(start_dim=1)
+        else:
+            processed_obs = observation
+            
+        # First get discrete distribution
+        discrete_logits = self.policy.get_discrete_output(processed_obs)
+        
+        # Sample discrete action
+        discrete_distribution = torch.distributions.Categorical(logits=discrete_logits)
+        discrete_action = discrete_distribution.sample()
+        
+        # Fix: Properly reshape discrete_action to match the expected dimensions
+        # discrete_logits shape is [n_batch, 1, num_features]
+        # discrete_action shape is [n_batch, 1]
+        # Need to reshape discrete_action to [n_batch, 1, 1] for scatter_
+        discrete_action_reshaped = discrete_action.unsqueeze(-1)
+        discrete_one_hot = torch.zeros_like(discrete_logits).scatter_(-1, discrete_action_reshaped, 1)
+        
+        # Get continuous mean (conditioned on sampled discrete action)
+        selected_continuous = self.policy.get_continuous_output(processed_obs, discrete_one_hot.squeeze(1))
+        
+        # First squeeze out the extra dimension
+        selected_continuous = selected_continuous.squeeze(2)  # Remove the extra dimension
+        expanded_continuous = selected_continuous.unsqueeze(1).expand(-1, discrete_logits.size(1), discrete_logits.size(2))
+        
+        # Create raw_outputs dict in the format expected by process_network_output
+        raw_outputs = {
+            'discrete': discrete_logits,
+            'continuous': expanded_continuous
+        }
+        
+        # Process network output - let the function handle sampling
+        action_dict = self.feature_registry.process_network_output(
+            raw_outputs, 
+            argmax=False, 
+            sample=False,
+            random_continuous=False,  # This will trigger sampling inside process_network_output
+            discrete_probs=discrete_one_hot  # Pass the one-hot encoded discrete action
+        )
+        
+        # Store the original selected continuous mean for PPO calculations
+        action_dict['discrete_action'] = discrete_action
+        
+        # Get value if value network exists
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs
+        }
+
+    def get_logits_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+        """Get logits, value, and entropy for PPO (only for discrete part)"""
+        # Get discrete logits
+        discrete_logits = self.policy.get_discrete_output(processed_observation)
+        
+        # Need to reshape actions to match the logits dimension
+        actions = discrete_action_indices.view(-1, 1, 1).expand(-1, discrete_logits.size(1), 1)
+        
+        # Gather logits for the specific actions that were taken
+        logits = discrete_logits.gather(-1, actions).squeeze(-1)
+        
+        # Get value if value network exists
+        value = self.value_net(processed_observation, process_state=False) if self.value_net else None
+        
+        # Calculate entropy (only for discrete part since continuous uses pathwise)
+        entropy = self.get_entropy(discrete_logits)
+        
+        return logits, value, entropy
 
 class GumbelSoftmaxAgent(HybridAgent):
     """
@@ -265,7 +384,149 @@ class GumbelSoftmaxAgent(HybridAgent):
             'raw_outputs': raw_outputs
         }
 
+class FactoredGumbelSoftmaxAgent(GumbelSoftmaxAgent):
+    """
+    Factored version of GumbelSoftmaxAgent that:
+    1. Uses separate networks for discrete and continuous outputs
+    2. Evaluates continuous network for each possible discrete action
+    3. Uses Gumbel-Softmax for differentiable discrete actions
+    """
+    def __init__(self, config, feature_registry=None, device='cpu'):
+        # Set flag to identify this as a factored agent
+        self.factored = True
+        super().__init__(config, feature_registry, device)
+    
+    def _init_policy(self, config):
+        """Initialize policy with separate discrete and continuous networks"""
+        return self._init_factored_policy(config)
+    
+    def forward(self, observation, train=True, process_state=True):
+        """Forward pass: evaluate continuous network for all possible discrete actions"""
+        processed_obs = observation['store_inventories'].flatten(start_dim=1)            
+        # Get discrete logits
+        discrete_logits = self.policy.get_discrete_output(processed_obs)
 
+        processed_obs = torch.concat([processed_obs, discrete_logits.squeeze(1)], dim=-1)
+
+        # Save pre-temperature logits
+        raw_outputs = {'pre_temp_discrete_logits': discrete_logits.detach().clone()}
+        
+        # Apply Gumbel-Softmax during training
+        if train and self.add_gumbel_noise:
+            # Sample from Gumbel(0, 1)
+            uniform_samples = torch.rand_like(discrete_logits)
+            gumbel_samples = -torch.log(-torch.log(uniform_samples + 1e-10) + 1e-10)
+            # Add Gumbel noise to logits
+            noisy_logits = discrete_logits + gumbel_samples
+        else:
+            noisy_logits = discrete_logits
+        
+        # Apply temperature scaling
+        scaled_logits = noisy_logits / self.temperature
+        raw_outputs['discrete'] = scaled_logits
+        
+        # Create one-hot encodings for all possible discrete actions
+        batch_size = processed_obs.size(0)
+        n_discrete = discrete_logits.size(-1)
+        
+        # Expand observation to evaluate with each possible discrete action
+        # [batch, features] -> [batch, n_discrete, features]
+        expanded_obs = processed_obs.unsqueeze(1).expand(-1, n_discrete, -1)
+        
+        # Create one-hot encodings for all discrete actions
+        one_hot = torch.eye(n_discrete, device=self.device)
+        # Expand one-hot to match batch size
+        # [n_discrete, n_discrete] -> [batch, n_discrete, n_discrete]
+        one_hot = one_hot.unsqueeze(0).expand(batch_size, -1, -1)
+        
+        # Get continuous outputs for all discrete actions
+        # Pass both expanded_obs and one_hot directly to get_continuous_output
+        continuous_outputs = self.policy.get_continuous_output(expanded_obs, one_hot)
+        continuous_outputs = continuous_outputs.squeeze(-1)
+
+        # Store continuous outputs
+        raw_outputs['continuous'] = continuous_outputs
+        
+        # Process network output
+        action_dict = self.feature_registry.process_network_output(
+            raw_outputs,
+            argmax=not train,
+            sample=False,
+            straight_through=self.use_straight_through and train
+        )
+        
+        # Get value if value network exists
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+        
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs
+        }   
+
+    def forward_old(self, observation, train=True, process_state=True):
+        """Forward pass: evaluate continuous network for all possible discrete actions"""
+        processed_obs = observation['store_inventories'].flatten(start_dim=1)            
+        # Get discrete logits
+        discrete_logits = self.policy.get_discrete_output(processed_obs)
+
+        processed_obs = torch.concat([processed_obs, discrete_logits.squeeze(1)], dim=-1)
+        
+        # Save pre-temperature logits
+        raw_outputs = {'pre_temp_discrete_logits': discrete_logits.detach().clone()}
+        
+        # Apply Gumbel-Softmax during training
+        if train and self.add_gumbel_noise:
+            # Sample from Gumbel(0, 1)
+            uniform_samples = torch.rand_like(discrete_logits)
+            gumbel_samples = -torch.log(-torch.log(uniform_samples + 1e-10) + 1e-10)
+            # Add Gumbel noise to logits
+            noisy_logits = discrete_logits + gumbel_samples
+        else:
+            noisy_logits = discrete_logits
+        
+        # Apply temperature scaling
+        scaled_logits = noisy_logits / self.temperature
+        raw_outputs['discrete'] = scaled_logits
+        
+        # Create one-hot encodings for all possible discrete actions
+        batch_size = processed_obs.size(0)
+        n_discrete = discrete_logits.size(-1)
+        
+        # Expand observation to evaluate with each possible discrete action
+        # [batch, features] -> [batch, n_discrete, features]
+        expanded_obs = processed_obs.unsqueeze(1).expand(-1, n_discrete, -1)
+        
+        # Create one-hot encodings for all discrete actions
+        one_hot = torch.eye(n_discrete, device=self.device)
+        # Expand one-hot to match batch size
+        # [n_discrete, n_discrete] -> [batch, n_discrete, n_discrete]
+        one_hot = one_hot.unsqueeze(0).expand(batch_size, -1, -1)
+        
+        # Get continuous outputs for all discrete actions
+        # Pass both expanded_obs and one_hot directly to get_continuous_output
+        continuous_outputs = self.policy.get_continuous_output(expanded_obs, one_hot)
+        continuous_outputs = continuous_outputs.squeeze(-1)
+
+        # Store continuous outputs
+        raw_outputs['continuous'] = continuous_outputs
+        
+        # Process network output
+        action_dict = self.feature_registry.process_network_output(
+            raw_outputs,
+            argmax=not train,
+            sample=False,
+            straight_through=self.use_straight_through and train
+        )
+        
+        # Get value if value network exists
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+        
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs
+        }   
 class ContinuousOnlyAgent(BaseAgent):
     """
     Approach 2: Only using continuous actions, and approximating discontinuities 
@@ -287,7 +548,7 @@ class ContinuousOnlyAgent(BaseAgent):
         self.use_straight_through = agent_params.get('use_straight_through', False)
         
         # Add new parameter for zero-out indices
-        self.zero_out_indices = agent_params.get('zero_out_action_dim', [])
+        self.zero_out_indices = agent_params.get('zero_out_action_dim', None)
         
         self.temperature = self.initial_temperature
         self.has_temperature = True
@@ -557,21 +818,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
     
     def _init_policy(self, config):
         """Initialize policy with separate discrete and continuous networks"""
-        # Get network dimensions from feature registry
-        network_dims = self.feature_registry.get_network_dimensions()
-        
-        # Update config
-        policy_params = config['nn_params']
-        policy_params['policy_network']['input_size'] = network_dims['input_size']
-        policy_params['policy_network']['heads']['discrete']['size'] = network_dims['n_discrete']
-        
-        # For continuous head, we only output a single value (not per discrete action)
-        # This will be expanded to the right shape later
-        policy_params['policy_network']['heads']['continuous']['size'] = 1
-        
-        # Create new policy network from the FactoredPolicy class defined in policy.py
-        policy_class = NeuralNetworkCreator().get_architecture("factored_policy")
-        return policy_class(policy_params, device=self.device)
+        return self._init_factored_policy(config)  # Uses default continuous_size=1
     
     def forward(self, observation, train=True, process_state=True):
         """Forward pass: first sample discrete action, then get continuous mean"""
@@ -598,7 +845,8 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         # Get continuous mean (conditioned on sampled discrete action)
         selected_continuous_mean = self.policy.get_continuous_output(processed_obs, discrete_one_hot.squeeze(1))
         
-        # Expand continuous mean to match discrete action dimension
+        # First squeeze out the extra dimension
+        selected_continuous_mean = selected_continuous_mean.squeeze(2)  # Remove the extra dimension
         expanded_continuous_mean = selected_continuous_mean.unsqueeze(1).expand(-1, discrete_logits.size(1), discrete_logits.size(2))
         
         # Use the scalar log_std parameter expanded to match the expanded mean's shape
@@ -682,6 +930,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
             processed_observation, 
             discrete_one_hot  # Already in correct shape
         )
+        selected_continuous_mean = selected_continuous_mean.squeeze(2)
         
         # Calculate continuous log probabilities
         if continuous_samples is not None:
@@ -779,3 +1028,4 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         total_entropy = discrete_entropy + continuous_entropy
         
         return total_logits, value, total_entropy
+
