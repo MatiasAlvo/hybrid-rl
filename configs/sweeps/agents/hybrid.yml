@@ -8,16 +8,14 @@ metric:
   goal: 'minimize'
 
 parameters:
-  add_gumbel_noise:
-    values:
-      - false
   anneal_lr:
     values:
       - true
       - false
   buffer_periods:
     values:
-      - 50
+      - 10
+      - 0
   clip_coef:
     distribution: uniform
     max: 0.2
@@ -30,22 +28,14 @@ parameters:
     distribution: uniform
     max: 0.95
     min: 0.92
-  initial_temperature:
-    distribution: log_uniform_values
-    max: 10
-    min: 1
   learning_rate:
     distribution: log_uniform_values
-    max: 1e-03
-    min: 1e-04
+    max: 1e-02
+    min: 1e-05
   max_grad_norm:
     distribution: uniform
-    max: 10
-    min: 5
-  min_temperature:
-    distribution: log_uniform_values
-    max: 0.2
-    min: 0.001
+    max: 100
+    min: 1
   normalize_advantages:
     values:
       - true
@@ -54,27 +44,45 @@ parameters:
       - false
   num_epochs:
     values:
+      - 1
+      - 3
       - 5
+      - 10
   pathwise_coef:
-    distribution: uniform
-    max: 10
-    min: 8
+    distribution: log_uniform_values
+    # distribution: uniform
+    max: 10000
+    # max: 10
+    # min: 100.0
+    min: 0.01
+    # min: 8
   policy_activation:
     values:
+      # - ELU
       - Tanh
+      # - ReLU
   reward_scaling:
     values:
       - true
+      - false
   reward_scaling_pathwise:
     values:
       - true
+      - false
   use_gae:
     values:
       - true
+      - false
   value_activation:
     values:
+      # - ELU
       - Tanh
+      # - ReLU
   value_function_coef:
     distribution: log_uniform_values
-    max: 0.2
+    max: 1.0
+    min: 0.1
+  continuous_scale:
+    distribution: log_uniform_values
+    max: 1000.0
     min: 0.1 

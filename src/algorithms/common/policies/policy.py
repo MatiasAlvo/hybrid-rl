@@ -587,7 +587,7 @@ class JustInTime(MyNeuralNetwork):
 
 class PolicyNetwork(nn.Module):
     """Base class for all policy networks"""
-    def __init__(self, config, device='cpu'):
+    def __init__(self, config, device='cpu', use_backbone=True):
         super().__init__()
         self.device = device
         policy_config = config['policy_network']
@@ -599,9 +599,12 @@ class PolicyNetwork(nn.Module):
         self.activation = policy_config['activation']
         self.dropout_rate = policy_config.get('dropout', 0.0)
         self.use_batch_norm = policy_config.get('batch_norm', False)
+        self.continuous_scale = torch.tensor(policy_config.get('continuous_scale', 1.0), device=device)
+        self.continuous_shift = torch.tensor(policy_config.get('continuous_shift', 0.0), device=device)
         
         # Build backbone
-        self.backbone = self._build_backbone()
+        if use_backbone:
+            self.backbone = self._build_backbone()
         self.to(device)
 
     def lazy_layer_init(self, layer, std=2**0.5, bias_const=0.0):
@@ -670,8 +673,8 @@ class PolicyNetwork(nn.Module):
 
 class FactoredPolicy(PolicyNetwork):
     """Policy network that factors discrete and continuous outputs with separate networks"""
-    def __init__(self, config, device='cpu'):
-        super().__init__(config, device)
+    def __init__(self, config, device='cpu', use_backbone=False):
+        super().__init__(config, device, use_backbone)
         
         # Get output dimensions from config
         self.heads = config['policy_network']['heads']
@@ -777,7 +780,7 @@ class FactoredPolicy(PolicyNetwork):
         
         # Get features and then output
         features = self.continuous_net(combined_input)
-        return self.continuous_head(features).unsqueeze(1)
+        return self.continuous_head(features).unsqueeze(1)*self.continuous_scale + self.continuous_shift
     
     def forward(self, x, process_state=True):
         """
@@ -804,10 +807,16 @@ class FactoredPolicy(PolicyNetwork):
             batch_size = x.size(0)
             n_discrete = self.heads['discrete']['size']
             
+            # Apply scale and shift from config
+            continuous_scale = self.config.get('agent_params', {}).get('continuous_scale', 1.0)
+            continuous_shift = self.config.get('agent_params', {}).get('continuous_shift', 0.0)
+            
+            # Create dummy continuous tensor with scale and shift applied
             dummy_continuous = torch.zeros(
                 (batch_size, n_discrete, 2), 
                 device=self.device
-            )
+            ) * continuous_scale + continuous_shift
+            
             outputs['continuous'] = dummy_continuous
             
         return outputs
@@ -843,19 +852,44 @@ class HybridPolicy(PolicyNetwork):
 
         # Get base features
         base_features = self.get_features(x).unsqueeze(1)
+        # concatenate base_features with x
+        base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
         
         # Create separate feature paths for each head
         outputs = {}
         if 'continuous' in self.heads_layers:
             if True:
-                outputs['continuous'] = self.heads_layers['continuous'](base_features)
+
+                # Apply the continuous head and scale/shift
+                continuous_output = self.heads_layers['continuous'](base_features)
+                
+                # Get scale and shift from config
+                continuous_scale = self.continuous_scale
+                continuous_shift = self.continuous_shift
+                
+                # Apply scale and shift - don't include these values in the output
+                outputs['continuous'] = continuous_output
+                # outputs['continuous'] = continuous_output * continuous_scale + continuous_shift
+                
+                # order = torch.clamp((target_inv - inventory_sum), min=0.0)
+                # continuous_output = outputs['continuous']*0 + order.unsqueeze(1).unsqueeze(2).expand(outputs['continuous'].shape)
+                # print(f'order: {order.shape}')
+                # print(f'order: {order[0]}')
+                # currently it is a tensor of shape (batch_size, 1). make it a tensor of shape (batch_size, 1, discrete_size[-1])
+                # continuous_output = continuous_output.unsqueeze(2).expand(outputs['discrete'].shape)
+
+                # inventory_sum = x.sum(dim=1)
+                # outputs['continuous'] = self.heads_layers['continuous'](base_features) + 62
+                # outputs['continuous'] = torch.clamp(outputs['continuous'] - inventory_sum.unsqueeze(1).unsqueeze(2).expand(outputs['continuous'].shape), min=0.0)
             elif process_state:
                 outputs['continuous'] = torch.zeros([128, 1, 2]).to(self.device)
             else:
                 outputs['continuous'] = torch.zeros([2560, 1, 2]).to(self.device)
         if 'discrete' in self.heads_layers:
             outputs['discrete'] = self.heads_layers['discrete'](base_features)
-        
+            # add a very large value to the last dimension on position 1
+            # outputs['discrete'][:, :, 1] = 100000000.0
+            # outputs['discrete'] = self.heads_layers['discrete'](base_features)
             
         return outputs
 
@@ -874,6 +908,7 @@ class HybridPolicy(PolicyNetwork):
         outputs = {}
         if 'discrete' in self.heads_layers:
             outputs['discrete'] = self.heads_layers['discrete'](features.clone())
+            
         if 'continuous' in self.heads_layers:
             # Create new tensor for continuous head
             continuous_features = features.clone()

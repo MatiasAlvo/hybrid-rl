@@ -17,9 +17,10 @@ class RangeManager:
     """
     def __init__(self, config: Dict, device: torch.device):
         self.device = device
-        self.discrete_features = config.get('discrete_features', {})
+        self.discrete_features = self._process_discrete_features(config.get('discrete_features', {}))
         self.validate_features()
         self.breakpoints = self._compute_breakpoints()
+        # print(f'breakpoint: {self.breakpoints}')
         self.ranges = self._compute_ranges()
         self.n_sub_ranges = len(self.ranges)
         
@@ -28,6 +29,40 @@ class RangeManager:
         
         # Valid combinations are all sub-ranges when using range-based approach
         self.valid_combinations = list(range(self.n_sub_ranges)) if self.ranges else None
+        
+        # Determine which activation function to use for each range
+        self._precompute_activation_types()
+        
+        # Pre-compute shift and scale factors for continuous value scaling
+        self._precompute_continuous_scale_factors()
+    
+    def _process_discrete_features(self, discrete_features: Dict) -> Dict:
+        """
+        Process discrete features configuration to handle 'inf' strings.
+        Converts any string 'inf' values to float('inf').
+        """
+        processed_features = {}
+        
+        for feature_name, feature in discrete_features.items():
+            if feature is None:
+                processed_features[feature_name] = None
+                continue
+            
+            processed_feature = feature.copy()  # Create a copy to avoid modifying the original
+            
+            # Process thresholds to convert string 'inf' to float('inf')
+            if 'thresholds' in processed_feature:
+                processed_thresholds = []
+                for threshold in processed_feature['thresholds']:
+                    if isinstance(threshold, str) and threshold.lower() == 'inf':
+                        processed_thresholds.append(float('inf'))
+                    else:
+                        processed_thresholds.append(threshold)
+                processed_feature['thresholds'] = processed_thresholds
+            
+            processed_features[feature_name] = processed_feature
+        
+        return processed_features
     
     def validate_features(self):
         """Validate feature definitions"""
@@ -94,6 +129,7 @@ class RangeManager:
             
             for i, (orig_start, orig_end) in enumerate(original_ranges):
                 for j, (sub_start, sub_end) in enumerate(self.ranges):
+                    # print(f'sub_start: {sub_start}, sub_end: {sub_end}, orig_start: {orig_start}, orig_end: {orig_end}')
                     if sub_start >= orig_start and sub_end <= orig_end:
                         range_indices[i].append(j)
             
@@ -160,8 +196,8 @@ class RangeManager:
                 # Sum probabilities and weighted continuous values for all sub-ranges in this range
                 for j in sub_range_indices:
                     feature_discrete[..., i] += discrete_probs[..., j]
-                    # feature_continuous[..., i] = torch.clamp(feature_continuous[..., i] + discrete_probs[..., j] * continuous_per_sub_range[..., j], min=0)
-                    feature_continuous[..., i] += discrete_probs[..., j] * continuous_per_sub_range[..., j]
+                    feature_continuous[..., i] = torch.clamp(feature_continuous[..., i] + discrete_probs[..., j] * continuous_per_sub_range[..., j], min=0)
+                    # feature_continuous[..., i] += discrete_probs[..., j] * continuous_per_sub_range[..., j]
             
             feature_mappings[feature_name] = {
                 'discrete': feature_discrete,      # Shape: (batch_size, n_stores, n_feature_ranges)
@@ -232,18 +268,75 @@ class RangeManager:
                 print("Any negative:", (probs < 0).any())
                 raise e
         # print(f'average probs: {probs.mean(dim=0)}')
-        return probs
+        return probs, None
+    
+    def _precompute_activation_types(self):
+        """
+        Determine which activation function to use for each range.
+        - sigmoid for ranges with finite upper bounds
+        - softplus for ranges with infinite upper bounds
+        """
+        if not self.ranges:
+            self.activation_types = None
+            return
+        
+        activation_types = []
+        for i, (_, upper_bound) in enumerate(self.ranges):
+            if np.isinf(upper_bound):
+                activation_types.append('softplus')
+            else:
+                activation_types.append('sigmoid')
+        
+        self.activation_types = activation_types
+    
+    def _precompute_continuous_scale_factors(self):
+        """Pre-compute shift and scale factors for continuous value scaling"""
+        if not self.ranges:
+            self.continuous_shifts = None
+            self.continuous_scales = None
+            return
+        
+        shifts = []
+        scales = []
+        for i, (min_val, max_val) in enumerate(self.ranges):
+            shifts.append(min_val)
+            
+            if self.activation_types[i] == 'sigmoid':
+                # For sigmoid, scale by the range size
+                scales.append(max_val - min_val)
+            else:  # softplus
+                # For softplus, scale by 1 since the activation already handles the scaling
+                scales.append(1.0)
+        
+        # Use float32 explicitly to match PyTorch's default dtype
+        self.continuous_shifts = torch.tensor(shifts, device=self.device, dtype=torch.float32)
+        self.continuous_scales = torch.tensor(scales, device=self.device, dtype=torch.float32)
     
     def get_scaled_continuous_values(self, raw_values):
-        """Scale continuous values to [0,1] range"""
-        if raw_values is None:
+        """
+        Scale continuous values using appropriate activation functions:
+        - sigmoid for ranges with finite upper bounds
+        - softplus for ranges with infinite upper bounds
+        """
+        if raw_values is None or self.activation_types is None:
             return None
-            
-        return torch.sigmoid(raw_values)
+        
+        # Start with zeros tensor of the same shape
+        activated_values = torch.zeros_like(raw_values)
+        
+        # Apply the appropriate activation function for each range
+        for i, activation_type in enumerate(self.activation_types):
+            if activation_type == 'sigmoid':
+                activated_values[..., i] = torch.sigmoid(raw_values[..., i])
+            else:  # softplus
+                activated_values[..., i] = raw_values[..., i]
+                # activated_values[..., i] = F.softplus(raw_values[..., i])
+        
+        return activated_values
     
     def scale_continuous_by_ranges(self, continuous_values, ranges):
         """
-        Scale [0,1] values to actual ranges while maintaining input shape
+        Scale activated values to actual ranges while maintaining input shape
         Args:
             continuous_values: tensor of shape [batch_size, n_stores, n_ranges]
             ranges: list of [min, max] pairs for each range
@@ -253,14 +346,8 @@ class RangeManager:
         if continuous_values is None or ranges is None:
             return None
         
-        scaled_values = torch.zeros_like(continuous_values)
-        
-        # Scale each range independently
-        for i, (min_val, max_val) in enumerate(ranges):
-            range_size = max_val - min_val
-            scaled_values[..., i] = min_val + continuous_values[..., i] * range_size
-        
-        return scaled_values
+        # Use pre-computed shift and scale factors for vectorized operation
+        return continuous_values * self.continuous_scales + self.continuous_shifts
     
     def compute_feature_actions(self, discrete_probs, continuous_values):
         """
@@ -285,8 +372,9 @@ class RangeManager:
                 # Sum over the sub-ranges that correspond to this range
                 # (this correspondence was pre-computed in _precompute_feature_range_mappings)
                 sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
-                # feature_action[..., range_idx] = torch.clamp(torch.sum(sub_actions, dim=-1, keepdim=False), min=0)
-                feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
+                feature_action[..., range_idx] = torch.clamp(torch.sum(sub_actions, dim=-1, keepdim=False), min=0)
+
+                # feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
                 feature_discrete[..., range_idx] = torch.sum(discrete_probs[..., sub_range_indices], dim=-1, keepdim=False)
             feature_actions[feature_name] = {
                 'action': feature_action,  # Shape: [batch_size, n_stores, n_feature_ranges] (represents the action for each range)

@@ -91,7 +91,7 @@ class Trainer():
             
             # Validation epoch
             with torch.no_grad():
-                dev_metrics = self.do_one_epoch(
+                dev_metrics, trajectory_data, additional_data = self.do_one_epoch(
                     optimizer_wrapper,
                     data_loaders['dev'],
                     loss_function,
@@ -101,7 +101,9 @@ class Trainer():
                     problem_params,
                     observation_params,
                     train=False,
-                    ignore_periods=params_by_dataset['dev']['ignore_periods']
+                    ignore_periods=params_by_dataset['dev']['ignore_periods'],
+                    return_trajectory=True,
+                    collect_additional_data=True
                 )
             
             # Only log if logger exists
@@ -112,6 +114,14 @@ class Trainer():
                 
                 if 'actions' in train_metrics:
                     self.logger.log_action_distribution(train_metrics['actions'], epoch)
+                
+                # Generate and log inventory vs action plot for dev set with dev loss
+                if 'trajectory_data' in dev_metrics:
+                    self.log_inventory_action_plot(
+                        dev_metrics['trajectory_data'], 
+                        epoch, 
+                        dev_loss=dev_metrics['loss/reported']
+                    )
                 
                 self.logger.flush_metrics()
             
@@ -295,6 +305,10 @@ class Trainer():
                     metrics[f'action_distribution/{key}'] = wandb.Histogram(all_data.flatten().cpu().numpy())
                 except Exception as e:
                     print(f"Error creating histogram for {key}: {e}")
+        
+        # Include trajectory data in metrics for visualization
+        if not train and trajectory_data is not None:
+            metrics['trajectory_data'] = trajectory_data
 
         if return_trajectory:
             if collect_additional_data:
@@ -405,7 +419,7 @@ class Trainer():
             'rewards': [],           # rewards at each time step
             'discrete_action_indices': [],  # one action per sub-range
             'total_action': [],      # total one-dimensional action
-            'logits': [],            # logits for the selected sub-range
+            'log_probs': [],            # log_probs for the selected sub-range
             'values': [],            # value of the state
             'terminated': []         # termination flags
         }
@@ -456,16 +470,16 @@ class Trainer():
         if 'feature_actions' in action_dict and 'total_action' in action_dict['feature_actions']:
             trajectory_data['total_action'].append(action_dict['feature_actions']['total_action'].detach().clone())
         
-        # Handle logits - check if they exist and are not None
-        if 'logits' in action_dict and action_dict['logits'] is not None:
-            if 'logits' not in trajectory_data:
-                trajectory_data['logits'] = []
-            trajectory_data['logits'].append(action_dict['logits'].detach().clone())
+        # Handle log_probs - check if they exist and are not None
+        if 'log_probs' in action_dict and action_dict['log_probs'] is not None:
+            if 'log_probs' not in trajectory_data:
+                trajectory_data['log_probs'] = []
+            trajectory_data['log_probs'].append(action_dict['log_probs'].detach().clone())
         else:
-            # For agents that don't use logits (like ContinuousOnly), add a dummy tensor or None
-            if 'logits' not in trajectory_data:
-                trajectory_data['logits'] = []
-            trajectory_data['logits'].append(None)
+            # For agents that don't use log_probs (like ContinuousOnly), add a dummy tensor or None
+            if 'log_probs' not in trajectory_data:
+                trajectory_data['log_probs'] = []
+            trajectory_data['log_probs'].append(None)
         
         if value is not None:
             trajectory_data['values'].append(value.detach().clone())
@@ -642,7 +656,7 @@ class Trainer():
         Convert an action dictionary into a flat vector.
         Order is important and must be consistent for both vectorization and de-vectorization.
         """
-        return action_dict['logits'].reshape(action_dict['logits'].shape[0], -1).detach()
+        return action_dict['log_probs'].reshape(action_dict['log_probs'].shape[0], -1).detach()
 
     def compute_loss(self, trajectory_dict, loss_function):
         """
@@ -758,4 +772,132 @@ class Trainer():
         csv_path = f"{path}/{model_name}_test_data.csv"
         df.to_csv(csv_path, index=False)
         print(f"Saved test data to {csv_path}")
+
+    def log_inventory_action_plot(self, trajectory_data, epoch, dev_loss=None):
+        """
+        Generate and log a plot showing the relationship between inventory and actions to wandb.
+        
+        Args:
+            trajectory_data: Dictionary containing trajectory information
+            epoch: Current epoch number
+            dev_loss: Optional dev loss to include in the title
+        """
+        try:
+            # Skip if logger is not available
+            if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
+                return
+            
+            import matplotlib.pyplot as plt
+            import numpy as np
+            import io
+            from PIL import Image
+            import wandb
+            
+            # Check if we have the necessary data
+            if "observations" not in trajectory_data or "total_action" not in trajectory_data:
+                print("Missing required data for inventory-action plot")
+                return
+            
+            # Get shapes: [T, B, F] for observations, [T, B, 1] for actions
+            T, B, _ = trajectory_data["observations"].shape
+            
+            # Limit the number of samples to plot (reduced from 100 to 50)
+            n_samples = min(30, B)
+            
+            # Select random batch indices first
+            random_batch_indices = torch.randperm(B)[:n_samples]
+            
+            # Select the samples for each tensor
+            selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
+            selected_total_action = trajectory_data["total_action"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+            
+            # Get discrete action indices if available
+            has_discrete_actions = "discrete_action_indices" in trajectory_data
+            if has_discrete_actions:
+                selected_discrete_actions = trajectory_data["discrete_action_indices"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+                # Flatten and convert to numpy
+                discrete_actions_flat = selected_discrete_actions.reshape(-1).detach().cpu().numpy()
+            
+            # Flatten time and batch dimensions for plotting
+            # Reshape to [T*n_samples, F] and [T*n_samples, 1]
+            inventories_flat = selected_inventories.reshape(-1, selected_inventories.shape[-1]).detach().cpu()
+            actions_flat = selected_total_action.reshape(-1, 1).detach().cpu()
+            
+            # Calculate inventory sums (sum across feature dimension)
+            inventory_sum = inventories_flat.sum(dim=1).numpy()
+            total_action = actions_flat.squeeze().numpy()
+            
+            # Create the plot with larger figure size
+            plt.figure(figsize=(16, 10))
+            
+            # Color points by discrete action if available
+            if has_discrete_actions:
+                # Get unique discrete actions for coloring
+                unique_actions = np.unique(discrete_actions_flat)
+                
+                # Create a colormap with distinct colors - Fix deprecated get_cmap
+                if len(unique_actions) <= 10:
+                    # For few actions, use tab10 colormap - using the new recommended approach
+                    cmap = plt.colormaps['tab10']
+                else:
+                    # For many actions, use hsv colormap - using the new recommended approach
+                    cmap = plt.colormaps['hsv']
+                
+                # Plot each discrete action with a different color
+                for i, action in enumerate(unique_actions):
+                    # Fix boolean mask conversion warning by explicitly converting to integer indices
+                    mask = np.where(discrete_actions_flat == action)[0]
+                    plt.scatter(
+                        inventory_sum[mask], 
+                        total_action[mask], 
+                        alpha=0.8, 
+                        s=30,  # Larger points for better visibility
+                        color=cmap(i % cmap.N),  # Use modulo to ensure we don't exceed colormap range
+                        label=f'Action {int(action)}'
+                    )
+            else:
+                # If no discrete actions, use a single color
+                plt.scatter(inventory_sum, total_action, alpha=0.7, s=50)
+            
+            # Add (s, S) policy line with thicker line
+            s, S = 26, 62  # Example values, adjust as needed
+            inventory_range = np.linspace(np.min(inventory_sum), np.max(inventory_sum), 100)
+            order_amounts = np.maximum(S - inventory_range, 0) * (inventory_range <= s)
+            plt.plot(inventory_range, order_amounts, color='black', linewidth=3, label='(s, S) Policy')
+            
+            # Add dev loss to title if provided
+            title = f'Inventory vs Actions (Epoch {epoch})'
+            if dev_loss is not None:
+                title += f' - Dev Loss: {dev_loss:.4f}'
+            
+            # Use larger font sizes for better readability
+            plt.title(title, fontsize=18)
+            plt.xlabel('Total Inventory', fontsize=16)
+            plt.ylabel('Total Actions', fontsize=16)
+            plt.xticks(fontsize=14)
+            plt.yticks(fontsize=14)
+            
+            # Add legend with reasonable size and position
+            if has_discrete_actions and len(unique_actions) <= 10:  # Only show legend if not too many actions
+                plt.legend(fontsize=12, loc='best', framealpha=0.7)
+            else:
+                plt.legend(fontsize=14)
+            
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            
+            # Convert plot to image with higher DPI for better quality
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            img = Image.open(buf)
+            
+            # Log to wandb directly through current_metrics
+            self.logger.current_metrics['inventory_action_plot'] = wandb.Image(img)
+            
+            # Close the plot to free memory
+            plt.close()
+            
+        except Exception as e:
+            print(f"Error generating inventory-action plot: {e}")
 

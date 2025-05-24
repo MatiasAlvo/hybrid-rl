@@ -72,7 +72,7 @@ class BaseAgent(nn.Module):
         """Return whether the agent is trainable"""
         return self.policy.trainable
     
-    def get_logits_value_and_entropy(self, processed_observation, action_indices):
+    def get_log_probs_value_and_entropy(self, processed_observation, action_indices):
         """Get logits for specific actions, value, and entropy. Override in subclasses."""
         raise NotImplementedError
     
@@ -156,6 +156,67 @@ class HybridAgent(BaseAgent):
         return NeuralNetworkCreator().get_architecture(policy_params['policy_network']['name'])(policy_params, device=self.device)
 
     def forward(self, observation, train=True):
+        """Forward pass through the agent using the new processing functions"""
+        # Get raw outputs from policy
+        raw_outputs = self.policy(observation)
+        
+        # Debug raw outputs
+        if isinstance(raw_outputs, dict) and 'discrete' in raw_outputs:
+            discrete_logits = raw_outputs['discrete']
+            if torch.isnan(discrete_logits).any() or torch.isinf(discrete_logits).any():
+                print("Warning: NaN or Inf in discrete logits from policy")
+                print("Discrete logits stats:", 
+                      f"range [{discrete_logits.min().item():.3f}, {discrete_logits.max().item():.3f}], "
+                      f"mean {discrete_logits.mean().item():.3f}")
+        
+        # Process discrete outputs
+        discrete_output = self.feature_registry.process_discrete_output(
+            raw_outputs['discrete'],
+            argmax=False,  # Use argmax for inference, sample for training
+            # argmax=not train,  # Use argmax for inference, sample for training
+            sample=True,      # Sample during training
+            straight_through=False
+        )
+        
+        # Process continuous outputs
+        continuous_output = self.feature_registry.process_continuous_output(
+            raw_outputs.get('continuous'),
+            discrete_action_indices=discrete_output['discrete_action_indices'],
+            continuous_mean=raw_outputs.get('continuous_mean'),
+            continuous_log_std=raw_outputs.get('continuous_log_std'),
+            random_continuous=False  # Default to deterministic continuous actions
+        )
+        
+        # Compute feature actions
+        feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
+            discrete_output['discrete_probs'],
+            continuous_output['continuous_values']
+        )
+        
+        # Combine outputs into action dictionary
+        action_dict = {
+            'discrete_probs': discrete_output['discrete_probs'],
+            'discrete_action_indices': discrete_output['discrete_action_indices'],
+            'log_probs': discrete_output['log_probs'],
+            'continuous_values': continuous_output['continuous_values'],
+            'raw_continuous_samples': continuous_output['raw_continuous_samples'],
+            'feature_actions': feature_actions
+        }
+        
+        # Add continuous log probs if available
+        if continuous_output['continuous_log_probs'] is not None:
+            action_dict['continuous_log_probs'] = continuous_output['continuous_log_probs']
+        
+        # Get value if value network exists
+        value = self.value_net(observation) if self.value_net is not None else None
+        
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs
+        }
+    
+    def forward_old(self, observation, train=True):
         """Forward pass through the agent"""
         # Get raw outputs from policy
         raw_outputs = self.policy(observation)
@@ -184,7 +245,7 @@ class HybridAgent(BaseAgent):
         distribution = torch.distributions.Categorical(logits=logits)
         return distribution.entropy()
     
-    def get_logits_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
         """
         Get logits, value, and entropy for PPO
         
@@ -212,13 +273,21 @@ class HybridAgent(BaseAgent):
         
         return logits, value, entropy
 
+    # def _get_required_losses(self):
+    #     """HybridAgent needs all loss components."""
+    #     return {
+    #         'policy_gradient': False,   # For discrete actions
+    #         'value': False,             # For PPO advantage estimation
+    #         'pathwise': True,          # For continuous actions
+    #         'entropy': False            # For exploration
+        # }
     def _get_required_losses(self):
         """HybridAgent needs all loss components."""
         return {
             'policy_gradient': True,   # For discrete actions
             'value': True,             # For PPO advantage estimation
             'pathwise': True,          # For continuous actions
-            'entropy': True            # For exploration
+            'entropy': False            # For exploration
         }
 
 class FactoredHybridAgent(HybridAgent):
@@ -288,22 +357,32 @@ class FactoredHybridAgent(HybridAgent):
         # Get value if value network exists
         value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
 
+        discrete_distribution = torch.distributions.Categorical(logits=discrete_logits.squeeze(1))
+        # override the logits part with that obtained from discrete_distribution (and getting the sampled action)
+        action_dict['logits'] = discrete_distribution.log_prob(discrete_action_reshaped.squeeze(1))
+        # action_dict['logits'] = discrete_logits.gather(-1, discrete_action.unsqueeze(-1)).squeeze(-1)
+
         return {
             'action_dict': action_dict,
             'value': value,
             'raw_outputs': raw_outputs
         }
 
-    def get_logits_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
         """Get logits, value, and entropy for PPO (only for discrete part)"""
         # Get discrete logits
         discrete_logits = self.policy.get_discrete_output(processed_observation)
+        # apply categorical distribution to get the logits for the sampled action
+        discrete_distribution = torch.distributions.Categorical(logits=discrete_logits.squeeze(1))
         
         # Need to reshape actions to match the logits dimension
         actions = discrete_action_indices.view(-1, 1, 1).expand(-1, discrete_logits.size(1), 1)
         
+        intermediate = discrete_distribution.log_prob(discrete_action_indices).unsqueeze(1)
         # Gather logits for the specific actions that were taken
-        logits = discrete_logits.gather(-1, actions).squeeze(-1)
+        # logits = discrete_logits.gather(-1, actions)
+        # logits = discrete_distribution.log_prob(discrete_action_indices).gather(-1, actions).squeeze(-1)
+        # logits = discrete_distribution.log_prob(discrete_action_indices).gather(-1, actions).squeeze(-1)
         
         # Get value if value network exists
         value = self.value_net(processed_observation, process_state=False) if self.value_net else None
@@ -311,7 +390,8 @@ class FactoredHybridAgent(HybridAgent):
         # Calculate entropy (only for discrete part since continuous uses pathwise)
         entropy = self.get_entropy(discrete_logits)
         
-        return logits, value, entropy
+        return intermediate, value, entropy
+        # return logits, value, entropy
 
 class GumbelSoftmaxAgent(HybridAgent):
     """
@@ -610,7 +690,7 @@ class ContinuousOnlyAgent(BaseAgent):
             'raw_outputs': raw_outputs
         }
     
-    def get_logits_value_and_entropy(self, processed_observation, action_indices):
+    def get_log_probs_value_and_entropy(self, processed_observation, action_indices):
         """Not used for this agent as we only have pathwise gradients"""
         # This method exists for API compatibility but will not be used for training
         raw_outputs = self.policy(processed_observation, process_state=False)
@@ -707,7 +787,7 @@ class GaussianPPOAgent(HybridAgent):
         # = 0.5 + 0.5*log(2*pi) + log_std
         return 0.5 + 0.5 * torch.log(2 * torch.tensor(torch.pi, device=log_std.device)) + log_std
     
-    def get_logits_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
         """
         Get combined log probabilities (discrete + continuous), value, and entropy for PPO
         
@@ -891,7 +971,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         params.append(self.log_std)
         return params
     
-    def get_logits_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
         """
         Get combined log probabilities (discrete + continuous), value, and entropy for PPO
         
@@ -951,7 +1031,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         
         return total_logits.unsqueeze(-1), value, total_entropy
 
-    def get_logits_value_and_entropy_old(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy_old(self, processed_observation, discrete_action_indices, continuous_samples=None):
         """
         Calculate log probabilities, value estimates, and entropy for PPO updates
         

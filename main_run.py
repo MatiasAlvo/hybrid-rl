@@ -306,7 +306,8 @@ def run_training(setting_config, hyperparams_config, mode='both'):
             trainer_params,
             discrete_allocation=store_params['demand']['distribution'] == 'poisson' and False
         )
-        print(f'Test metrics: {test_metrics}')
+        print(f'Test total loss: {test_metrics["loss/total"]}')
+        print(f'Test reported loss: {test_metrics["loss/reported"]}')
 
     # Always close logger if it exists
     if trainer.logger is not None:

@@ -122,6 +122,8 @@ def train_sweep(sweep_config):
                 'temperature_decay': ('hyperparams', ['agent_params', 'temperature_decay']),
                 'use_straight_through': ('hyperparams', ['agent_params', 'use_straight_through']),
                 'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
+                # Add mapping for continuous scale parameter - updated path
+                'continuous_scale': ('hyperparams', ['nn_params', 'policy_network', 'continuous_scale']),
                 # Add mapping for threshold parameter
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
                 'fixed_cost': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'values', 1]),

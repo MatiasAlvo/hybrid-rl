@@ -7,6 +7,7 @@ import os
 import yaml
 from collections import OrderedDict
 import datetime
+import shutil  # Add this import for directory removal
 
 class Logger:
     def __init__(self, config: Dict[str, Any], model: Optional[torch.nn.Module] = None):
@@ -49,7 +50,15 @@ class Logger:
                     config=config.get_complete_config(),
                     name=f"inventory__{setting_name}__{timestamp}",
                     group=setting_name,  # Use setting_name for grouping
-                    settings=wandb.Settings(start_method="thread")
+                    settings=wandb.Settings(
+                        start_method="thread",
+                        # Disable local storage by setting dir to None
+                        # This prevents wandb from creating local files
+                        _disable_stats=True,
+                        _disable_meta=True,
+                        sync_tensorboard=False,
+                        save_code=False
+                    )
                 )
                 
                 # Add relevant problem parameters as tags
@@ -256,10 +265,56 @@ class Logger:
         self.current_metrics = {}
 
     def close(self):
-        """Close wandb connection"""
+        """Close wandb connection and delete local files"""
         if self.use_wandb:
             self.flush_metrics()
             try:
-                wandb.finish()
+                # Get the wandb run directory before finishing
+                if wandb.run is not None:
+                    wandb_dir = wandb.run.dir
+                    
+                    # Finish the run
+                    wandb.finish()
+                    
+                    # Delete the wandb directory if it exists
+                    if os.path.exists(wandb_dir):
+                        print(f"Cleaning up wandb directory: {wandb_dir}")
+                        try:
+                            shutil.rmtree(wandb_dir)
+                        except Exception as e:
+                            print(f"Warning: Failed to delete wandb directory: {e}")
+                    
+                    # Also try to clean up the wandb folder in the current directory
+                    wandb_folder = os.path.join(os.getcwd(), "wandb")
+                    if os.path.exists(wandb_folder):
+                        print(f"Cleaning up wandb folder: {wandb_folder}")
+                        try:
+                            shutil.rmtree(wandb_folder)
+                        except Exception as e:
+                            print(f"Warning: Failed to delete wandb folder: {e}")
+                else:
+                    wandb.finish()
             except Exception as e:
-                print(f"Warning: Error closing wandb: {e}") 
+                print(f"Warning: Error closing wandb: {e}")
+
+    def log_image(self, name: str, image, step: Optional[int] = None):
+        """
+        Log an image to wandb
+        
+        Args:
+            name: Name of the image
+            image: PIL Image or numpy array
+            step: Optional step number
+        """
+        if not self.use_wandb:
+            return
+        
+        try:
+            # Log image to wandb
+            self.current_metrics[name] = wandb.Image(image)
+            
+            # If step is provided, log immediately
+            if step is not None:
+                wandb.log({name: wandb.Image(image), 'epoch': step})
+        except Exception as e:
+            print(f"Warning: Failed to log image to wandb: {e}") 

@@ -8,7 +8,7 @@ trainer_params:
   'load_previous_model': false
   'load_model_path': ''
   'base_dir': 'models/saved_models'
-  'compute_metrics_on_test': true
+  'compute_metrics_on_test': false
 
 logging_params: 
   'use_wandb': true
@@ -21,6 +21,7 @@ logging_params:
 
 agent_params:
   'agent_type': 'gaussian_ppo'
+  'fixed_std': true  # Set to true to use state-independent standard deviation
 
 optimizer_params:
   'learning_rate': 0.00015
@@ -38,13 +39,17 @@ optimizer_params:
 
 nn_params:
   policy_network:
-    name: 'gaussian_ppo_policy'
+    name: 'hybrid_policy'
     input_size: 2
     hidden_layers: [64, 64]
     activation: 'Tanh'
     dropout: 0.0
-    batch_norm: false
+    batch_norm: false    
     heads:
+      discrete:
+        enabled: true
+        size: 0 # override in range manager
+        activation: 'Linear'
       continuous:
         enabled: true
         size: 0 # override in range manager

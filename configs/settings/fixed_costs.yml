@@ -44,7 +44,9 @@ problem_params:
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
-      'thresholds': [-0.01, 0.0, 200.0]  # first and last values are the same across all discrete features
+      # 'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
+      # 'thresholds': [-0.01, 0.0, 100.0]  # first and last values are the same across all discrete features
+      'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
       'values': [0.0, 64.0]
 
 observation_params:
@@ -112,15 +114,15 @@ params_by_dataset :
   'train': 
     'n_samples': 1024 
     'batch_size': 128  # Values tested: 1024, 8192
-    'periods': 200 
+    'periods': 150 
     'ignore_periods': 16 
   'dev': 
     'n_samples': 1024 
     'batch_size': 128 
-    'periods': 200 
+    'periods': 150 
     'ignore_periods': 16 
   'test': 
     'n_samples': 1024 
     'batch_size': 128 
-    'periods': 200
+    'periods': 150
     'ignore_periods': 16

@@ -8,7 +8,7 @@ trainer_params:
   'load_previous_model': false
   'load_model_path': ''
   'base_dir': 'models/saved_models'
-  'compute_metrics_on_test': true
+  'compute_metrics_on_test': false
 
 logging_params: 
   'use_wandb': false
@@ -17,7 +17,7 @@ logging_params:
   'wandb_entity': "alvomatias"
   'exp_name': "factored_hybrid"
   'env_name': "inventory"
-  'setting_name': "one_store_fixed_costs"
+  'setting_name': "one_store_fixed_costs_lost"
 
 agent_params:
   'agent_type': 'factored_hybrid'
@@ -35,7 +35,8 @@ optimizer_params:
     'use_gae': true
     'num_epochs': 5
     'value_function_coef': 0.1
-    'pathwise_coef': 9.0
+    'pathwise_coef': 1.0
+    'reward_scaling': true
     'reward_scaling_pathwise': true
 
 nn_params:
@@ -46,6 +47,8 @@ nn_params:
     activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
+    # continuous_scale: 1.0
+    # continuous_shift: 5.0
     heads:
       discrete:
         enabled: true

@@ -67,8 +67,92 @@ class FeatureRegistry:
         """Return observation keys for value network"""
         # You might want to customize this based on your specific environment
         return ['store_inventories']
+
+    def process_discrete_output(self, raw_discrete_logits, argmax=False, sample=False, straight_through=False):
+        """
+        Process network outputs into action space for discrete actions only.
+        Uses PyTorch's Categorical distribution for better compatibility with RL algorithms.
+        
+        Args:
+            raw_discrete_logits: Tensor containing unnormalized logits
+            argmax: Whether to take argmax for discrete actions
+            sample: Whether to sample from discrete distribution
+            straight_through: Whether to apply straight-through gradient estimation
+        
+        Returns:
+            Dictionary containing processed discrete actions
+        """
+        # Get original shape for reshaping later
+        original_shape = raw_discrete_logits.shape
+        
+        # Reshape logits to 2D for Categorical (batch_size*n_stores, n_discrete)
+        reshaped_logits = raw_discrete_logits.reshape(-1, raw_discrete_logits.size(-1))
+        
+        # Create categorical distribution
+        distribution = torch.distributions.Categorical(logits=reshaped_logits)
+        
+        # Get probabilities
+        probs = distribution.probs
+        
+        # Select actions based on argmax or sampling
+        if argmax:
+            action_indices = probs.argmax(dim=-1)
+        elif sample:
+            action_indices = distribution.sample()
+        else:
+            # Default to using probabilities directly
+            discrete_probs = probs.reshape(original_shape)
+            discrete_action_indices = discrete_probs.argmax(dim=-1)
+            log_probs = None
+            
+            # Apply straight-through gradient estimation if requested
+            if straight_through:
+                # Get hard one-hot encoding (forward pass)
+                indices = torch.argmax(discrete_probs, dim=-1, keepdim=True)
+                hard_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
+                
+                # Straight-through trick: hard values in forward pass, but gradients flow through soft values
+                discrete_probs = hard_probs - discrete_probs.detach() + discrete_probs
+            
+            return {
+                'discrete_probs': discrete_probs,  # Probability distribution
+                'discrete_action_indices': discrete_action_indices,  # Index format
+                'log_probs': log_probs  # Log probabilities of selected actions
+            }
+        
+        # Get log probabilities of selected actions
+        log_probs = distribution.log_prob(action_indices)
+        
+        # Create one-hot vectors for selected actions
+        discrete_probs = torch.zeros_like(reshaped_logits)
+        discrete_probs.scatter_(-1, action_indices.unsqueeze(-1), 1.0)
+        
+        # Reshape back to original shape
+        discrete_probs = discrete_probs.reshape(original_shape)
+        
+        # Reshape action indices and log probs to match expected output shape
+        discrete_action_indices = action_indices.reshape(original_shape[:-1])
+        log_probs = log_probs.reshape(original_shape[:-1])
+        
+        # Apply straight-through gradient estimation if requested
+        if straight_through and not argmax:  # Only apply when not using argmax
+            # Get hard one-hot encoding (forward pass)
+            indices = torch.argmax(discrete_probs, dim=-1, keepdim=True)
+            hard_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
+            
+            # Straight-through trick: hard values in forward pass, but gradients flow through soft values
+            discrete_probs = hard_probs - discrete_probs.detach() + discrete_probs
+        
+        # Create action dictionary
+        action_dict = {
+            'discrete_probs': discrete_probs,  # One-hot format
+            'discrete_action_indices': discrete_action_indices,  # Index format
+            'log_probs': log_probs  # Log probabilities of selected actions
+        }
+        
+        return action_dict
     
-    def process_network_output(self, raw_outputs, argmax=False, sample=False, random_continuous=False, straight_through=False, discrete_probs=None):
+    def process_network_output(self, raw_outputs, argmax=False, sample=False, random_continuous=False, straight_through=False, discrete_probs=None, log_probs=None):
         """
         Process network outputs into action space - works for all agent types
         
@@ -78,6 +162,8 @@ class FeatureRegistry:
             sample: Whether to sample from discrete distribution
             random_continuous: Whether to sample from Gaussian distribution for continuous actions
             straight_through: Whether to apply straight-through gradient estimation
+            discrete_probs: Optional pre-computed discrete probabilities
+            log_probs: Optional pre-computed log probabilities
         """
         # Get discrete probabilities if discrete head exists
         discrete_action_indices = None
@@ -87,21 +173,21 @@ class FeatureRegistry:
             # For FactoredGaussianPPOAgent, one-hot is already passed, so we should not compute it
             if discrete_probs is None:
                 # Apply softmax, then argmax if argmax is True, or sample if sample is True (and return one-hot)
-                discrete_probs = self.range_manager.get_discrete_probabilities(
+                discrete_probs, log_probs = self.range_manager.get_discrete_probabilities(
                     raw_outputs['discrete'], 
                     argmax=argmax,
                     sample=sample
                 )
             
-            # Apply straight-through gradient estimation if requested
-            if straight_through and not argmax:  # Only apply when not using argmax
-                # Get hard one-hot encoding (forward pass)
-                indices = torch.argmax(discrete_probs, dim=-1, keepdim=True)
-                hard_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
+                # Apply straight-through gradient estimation if requested
+                if straight_through and not argmax:  # Only apply when not using argmax
+                    # Get hard one-hot encoding (forward pass)
+                    indices = torch.argmax(discrete_probs, dim=-1, keepdim=True)
+                    hard_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
+                    
+                    # Straight-through trick: hard values in forward pass, but gradients flow through soft values
+                    discrete_probs = hard_probs - discrete_probs.detach() + discrete_probs
                 
-                # Straight-through trick: hard values in forward pass, but gradients flow through soft values
-                discrete_probs = hard_probs - discrete_probs.detach() + discrete_probs
-            
             # Get indices of selected actions (where the 1s are in discrete_probs)
             discrete_action_indices = discrete_probs.argmax(dim=-1)  # This gives us indices instead of one-hot
             # Get logits for selected actions - using gather with proper reshaping
@@ -165,6 +251,66 @@ class FeatureRegistry:
             action_dict['raw_continuous_samples'] = raw_continuous_samples
         
         return action_dict
+    
+    def process_continuous_output(self, raw_continuous, discrete_action_indices=None, continuous_mean=None, 
+                                 continuous_log_std=None, random_continuous=False):
+        """
+        Process network outputs for continuous actions.
+        
+        Args:
+            raw_continuous: Tensor containing raw continuous values
+            discrete_action_indices: Indices of selected discrete actions (for combining log probs)
+            continuous_mean: Mean values for Gaussian distribution (if using stochastic policy)
+            continuous_log_std: Log standard deviation for Gaussian distribution (if using stochastic policy)
+            random_continuous: Whether to sample from Gaussian distribution
+        
+        Returns:
+            Dictionary containing processed continuous actions and related information
+        """
+        # Initialize raw_continuous_samples with the provided raw_continuous
+        raw_continuous_samples = raw_continuous
+        continuous_log_probs = None
+        
+        # If using Gaussian policy, sample from the distribution
+        if random_continuous and continuous_mean is not None and continuous_log_std is not None:
+            # Clamp log_std for numerical stability
+            continuous_log_std = torch.clamp(continuous_log_std, min=-20, max=2)
+            continuous_std = torch.exp(continuous_log_std)
+            
+            # Sample from the Gaussian distribution
+            epsilon = torch.randn_like(continuous_mean, device=continuous_mean.device)
+            raw_continuous_samples = continuous_mean + continuous_std * epsilon
+            
+            # Calculate log probabilities for the sampled actions
+            normal_dist = torch.distributions.Normal(continuous_mean, continuous_std)
+            continuous_log_probs = normal_dist.log_prob(raw_continuous_samples)  # [batch, n_discrete, n_continuous]
+            
+            # If discrete_action_indices is provided, get log probs for selected actions
+            if discrete_action_indices is not None:
+                # Reshape indices for gathering
+                gather_indices = discrete_action_indices.unsqueeze(-1).expand(-1, -1, continuous_log_probs.size(-1))
+                
+                # Get log probs for selected discrete actions
+                selected_continuous_log_probs = continuous_log_probs.gather(1, gather_indices)
+                
+                # Sum log probs across continuous dimensions
+                continuous_log_probs = selected_continuous_log_probs.sum(dim=-1)
+        
+        # Process the continuous values through range scaling
+        continuous_values = self.range_manager.get_scaled_continuous_values(raw_continuous_samples)
+        continuous_values = self.range_manager.scale_continuous_by_ranges(
+            continuous_values,
+            self.range_manager.get_continuous_ranges()
+        )
+        
+        # Create result dictionary
+        result = {
+            'continuous_values': continuous_values,
+            'raw_continuous_samples': raw_continuous_samples,
+            'continuous_log_probs': continuous_log_probs
+        }
+        
+        return result
     
     def process_continuous_only_output(self, continuous_values, temperature=0.5, argmax=False, straight_through=False, zero_out_indices=None, train=True):
         """
@@ -630,3 +776,23 @@ class FeatureRegistry:
         """Apply feature normalization"""
         # Will be implemented for PPO
         return features
+
+    def compute_feature_actions_from_outputs(self, discrete_probs, continuous_values):
+        """
+        Compute feature actions from discrete probabilities and continuous values.
+        This is a wrapper around the range_manager's compute_feature_actions method.
+        
+        Args:
+            discrete_probs: Tensor containing discrete probabilities
+            continuous_values: Tensor containing continuous values
+            
+        Returns:
+            Dictionary containing feature actions
+        """
+        # Compute feature actions using range manager
+        feature_actions = self.range_manager.compute_feature_actions(
+            discrete_probs, 
+            continuous_values
+        )
+        
+        return feature_actions
