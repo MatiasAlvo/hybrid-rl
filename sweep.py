@@ -116,6 +116,7 @@ def train_sweep(sweep_config):
                 'pathwise_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'pathwise_coef']),
                 'reward_scaling_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling_pathwise']),
                 'max_grad_norm': ('hyperparams', ['optimizer_params', 'ppo_params', 'max_grad_norm']),
+                'entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'entropy_coef']),
                 # Unified temperature parameters
                 'initial_temperature': ('hyperparams', ['agent_params', 'initial_temperature']),
                 'min_temperature': ('hyperparams', ['agent_params', 'min_temperature']),
@@ -124,6 +125,7 @@ def train_sweep(sweep_config):
                 'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
                 # Add mapping for continuous scale parameter - updated path
                 'continuous_scale': ('hyperparams', ['nn_params', 'policy_network', 'continuous_scale']),
+                'use_wandb': ('hyperparams', ['logging_params', 'use_wandb']),
                 # Add mapping for threshold parameter
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
                 'fixed_cost': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'values', 1]),
@@ -308,7 +310,9 @@ if __name__ == "__main__":
             _temp_dir=tempfile.mkdtemp(),
             runtime_env={
                 "env_vars": {
-                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, available_gpus))
+                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, available_gpus)),
+                    # "CUDA_LAUNCH_BLOCKING": "1",
+                    # "TORCH_USE_CUDA_DSA": "1"
                 }
             }
         )

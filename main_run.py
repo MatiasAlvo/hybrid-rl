@@ -3,7 +3,6 @@
 # Standard imports
 import sys
 from collections import defaultdict as DefaultDict
-import logging
 from datetime import datetime
 import os
 import random
@@ -18,9 +17,7 @@ from src.envs.inventory.hybrid_simulator import HybridSimulator
 from src.envs.inventory.range_manager import RangeManager
 
 # Algorithm imports
-from src.algorithms.common.policies.policy import PolicyNetwork
-from src.algorithms.hdpo.losses.loss import PolicyLoss
-from src.algorithms.hdpo.agents.hdpo_agent import HDPOAgent  # Ensure HDPOAgent is imported correctly
+from src.algorithms.hybrid.losses.loss import PolicyLoss
 from src.algorithms.hybrid.agents.hybrid_agent import HybridAgent  # Ensure HybridAgent is imported correctly
 from src.algorithms.hybrid.agents.hybrid_agent import (
     GaussianPPOAgent, 
@@ -39,13 +36,8 @@ from src.training.trainer import Trainer
 
 # Feature registry imports
 from src.features.feature_registry import FeatureRegistry
-# from src.algorithms.optimizers.hdpo_optimizer import HDPOOptimizer
-# from src.algorithms.optimizers.hybrid_optimizer import HybridOptimizer
-from src.algorithms.hdpo.optimizer_wrappers.hdpo_wrapper import HDPOWrapper
 from src.algorithms.hybrid.optimizer_wrappers.hybrid_wrapper import HybridWrapper
 
-from src.utils.config_loader import ConfigLoader
-from src.utils.logging_config import setup_logging
 from src.utils.config import Config
 
 if False:
@@ -59,6 +51,81 @@ def get_timestamp():
 def get_date_folder():
     """Get folder name based on current date"""
     return datetime.now().strftime("%Y%m%d")
+
+def create_parameter_groups_with_lr(model, base_lr, lr_multipliers):
+    """Create parameter groups with different learning rate multipliers"""
+    param_groups = []
+    
+    # Define learning rate multipliers for different components
+    # Default to 1.0 if not specified
+    value_multiplier = lr_multipliers.get('value', 1.0)
+    backbone_multiplier = lr_multipliers.get('backbone', 1.0)
+    continuous_multiplier = lr_multipliers.get('continuous', 1.0)
+    discrete_multiplier = lr_multipliers.get('discrete', 1.0)
+    other_multiplier = lr_multipliers.get('other', 1.0)
+    
+    # Group parameters by component
+    value_params = []
+    backbone_params = []
+    continuous_params = []
+    discrete_params = []
+    other_params = []
+    
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            if 'value' in name:
+                value_params.append(param)
+            elif 'backbone' in name:
+                backbone_params.append(param)
+            elif 'continuous' in name:
+                continuous_params.append(param)
+            elif 'discrete' in name:
+                discrete_params.append(param)
+            else:
+                other_params.append(param)
+    
+    # Create parameter groups with calculated learning rates
+    if value_params:
+        param_groups.append({
+            'params': value_params, 
+            'lr': base_lr * value_multiplier, 
+            'name': 'value'
+        })
+    if backbone_params:
+        param_groups.append({
+            'params': backbone_params, 
+            'lr': base_lr * backbone_multiplier, 
+            'name': 'backbone'
+        })
+    if continuous_params:
+        param_groups.append({
+            'params': continuous_params, 
+            'lr': base_lr * continuous_multiplier, 
+            'name': 'continuous'
+        })
+    if discrete_params:
+        param_groups.append({
+            'params': discrete_params, 
+            'lr': base_lr * discrete_multiplier, 
+            'name': 'discrete'
+        })
+    if other_params:
+        param_groups.append({
+            'params': other_params, 
+            'lr': base_lr * other_multiplier, 
+            'name': 'other'
+        })
+    
+    # Print learning rate configuration for verification
+    print(f"\n=== LEARNING RATE CONFIGURATION ===")
+    print(f"Base learning rate: {base_lr}")
+    print(f"Learning rate multipliers: {lr_multipliers}")
+    print(f"Final learning rates per group:")
+    for group in param_groups:
+        print(f"  {group['name']:12}: {group['lr']:.6f} (base_lr × {group['lr']/base_lr:.3f})")
+    print("=" * 40)
+    
+    return param_groups
 
 def run_training(setting_config, hyperparams_config, mode='both'):
     """
@@ -204,19 +271,35 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     print(f"Creating model with agent type: {agent_type}")
     print(f"Creating model with policy: {nn_params['policy_network']['name']}")
     
-    # Create the appropriate agent
-    if feature_registry:
-        if agent_type in agent_mapping:
-            model = agent_mapping[agent_type](agent_config, feature_registry, device=device)
-            print(f"Created model with agent class: {type(model).__name__}")
-        else:
-            print(f"Warning: Unknown agent type '{agent_type}', defaulting to HybridAgent")
-            model = HybridAgent(agent_config, feature_registry, device=device)
+    if agent_type in agent_mapping:
+        model = agent_mapping[agent_type](agent_config, feature_registry, device=device)
+        print(f"Created model with agent class: {type(model).__name__}")
     else:
-        # For non-hybrid problems, use HDPOAgent
-        model = HDPOAgent(agent_config, device=device)
+        print(f"Warning: Unknown agent type '{agent_type}', defaulting to HybridAgent")
+        model = HybridAgent(agent_config, feature_registry, device=device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=optimizer_params['learning_rate'], eps=1e-5)
+    # Get learning rate multipliers from config, with sensible defaults
+    lr_multipliers = optimizer_params.get('lr_multipliers', {
+        'value': 1.0,
+        'backbone': 1.0,
+        'continuous': 1.0,
+        'discrete': 1.0,
+        'other': 1.0
+    })
+
+    print(f"Learning rate multipliers from config: {lr_multipliers}")
+    print(f"Base learning rate: {optimizer_params['learning_rate']}")
+
+    param_groups = create_parameter_groups_with_lr(
+        model, 
+        optimizer_params['learning_rate'], 
+        lr_multipliers
+    )
+    optimizer = torch.optim.Adam(param_groups, eps=1e-5)
+    
+    # optimizer = torch.optim.AdamW(param_groups)
+
+    # optimizer = torch.optim.Adam(model.parameters(), lr=optimizer_params['learning_rate'], eps=1e-5)
 
     # Initialize trainer
     trainer = Trainer(device=device)
@@ -233,16 +316,10 @@ def run_training(setting_config, hyperparams_config, mode='both'):
 
     # Create optimizer wrapper with PPO params
     wrapper_params = {
-        'gradient_clip': optimizer_params.get('gradient_clip'),
-        'weight_decay': optimizer_params.get('weight_decay', 0.0),
         'ppo_params': optimizer_params.get('ppo_params', {})
     }
 
-    optimizer_wrapper = (
-        HybridWrapper(model, optimizer, device=device, **wrapper_params)
-        if feature_registry else
-        HDPOWrapper(model, optimizer, device=device)
-    )
+    optimizer_wrapper = HybridWrapper(model, optimizer, device=device, **wrapper_params)
 
     # Load previous model if specified
     if trainer_params['load_previous_model']:
@@ -253,7 +330,7 @@ def run_training(setting_config, hyperparams_config, mode='both'):
         print("Model loaded successfully")
 
     # Initialize simulator based on type
-    simulator = (HybridSimulator(feature_registry, device=device) 
+    simulator = (HybridSimulator(feature_registry, model=model, device=device) 
                 if feature_registry else 
                 Simulator(device=device))
 

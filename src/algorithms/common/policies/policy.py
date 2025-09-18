@@ -1,8 +1,8 @@
 from src import torch, nn, np
 import datetime
 import copy
-from src.algorithms.hdpo.modules.forecaster import FullyConnectedForecaster
-from tensordict.nn import TensorDictModule
+# from src.algorithms.hdpo.modules.forecaster import FullyConnectedForecaster
+# from tensordict.nn import TensorDictModule
 from src.algorithms.common.policies.policy_utils import apply_proportional_allocation, apply_softmax_feasibility, concatenate_with_context
 
 class MyNeuralNetwork(nn.Module):
@@ -599,8 +599,11 @@ class PolicyNetwork(nn.Module):
         self.activation = policy_config['activation']
         self.dropout_rate = policy_config.get('dropout', 0.0)
         self.use_batch_norm = policy_config.get('batch_norm', False)
-        self.continuous_scale = torch.tensor(policy_config.get('continuous_scale', 1.0), device=device)
-        self.continuous_shift = torch.tensor(policy_config.get('continuous_shift', 0.0), device=device)
+        self.continuous_scale = torch.tensor(policy_config['continuous_scale'], device=device)
+        self.continuous_shift = torch.tensor(policy_config['continuous_shift'], device=device)
+        # self.continuous_shift = torch.tensor(policy_config.get('continuous_shift', 0.0), device=device)
+        # self.continuous_scale_factor = torch.tensor(policy_config.get('continuous_scale_factor', 1.0), device=device)
+        # self.continuous_shift_factor = torch.tensor(policy_config.get('continuous_shift_factor', 1.0), device=device)
         
         # Build backbone
         if use_backbone:
@@ -845,6 +848,7 @@ class HybridPolicy(PolicyNetwork):
                 std=0.01  # Smaller std for policy output layer
             )
         self.to(self.device)
+        
     def forward(self, x, process_state=True):
         if process_state:
             x = x['store_inventories']
@@ -863,13 +867,7 @@ class HybridPolicy(PolicyNetwork):
                 # Apply the continuous head and scale/shift
                 continuous_output = self.heads_layers['continuous'](base_features)
                 
-                # Get scale and shift from config
-                continuous_scale = self.continuous_scale
-                continuous_shift = self.continuous_shift
-                
-                # Apply scale and shift - don't include these values in the output
-                outputs['continuous'] = continuous_output
-                # outputs['continuous'] = continuous_output * continuous_scale + continuous_shift
+                outputs['continuous'] = continuous_output * self.continuous_scale + self.continuous_shift
                 
                 # order = torch.clamp((target_inv - inventory_sum), min=0.0)
                 # continuous_output = outputs['continuous']*0 + order.unsqueeze(1).unsqueeze(2).expand(outputs['continuous'].shape)
@@ -914,6 +912,94 @@ class HybridPolicy(PolicyNetwork):
             continuous_features = features.clone()
             outputs['continuous'] = self.heads_layers['continuous'](continuous_features)
             
+        return outputs
+
+class SeparateNetworkPolicy(PolicyNetwork):
+    """Policy network with completely separate networks for discrete and continuous actions"""
+    def __init__(self, config, device='cpu'):
+        # Initialize without backbone since we're building separate networks
+        super().__init__(config, device, use_backbone=False)
+        
+        # Get output dimensions from config
+        self.heads = config['policy_network']['heads']
+        last_hidden = self.hidden_layers[-1]
+        
+        # Build discrete network
+        if self.heads['discrete']['enabled']:
+            discrete_layers = self._build_network_layers('discrete', 'Tanh')
+            print(f"Hardcoding discrete network layers to Tanh")
+            self.discrete_net = nn.Sequential(*discrete_layers)
+            self.discrete_head = self.layer_init(
+                nn.Linear(last_hidden, self.heads['discrete']['size']),
+                std=0.01
+            )
+        
+        # Build continuous network  
+        if self.heads['continuous']['enabled']:
+            continuous_layers = self._build_network_layers('continuous', 'Tanh')
+            print(f"Hardcoding continuous network layers to Tanh")
+            # continuous_layers = self._build_network_layers('continuous', 'ELU')
+            self.continuous_net = nn.Sequential(*continuous_layers)
+            self.continuous_head = self.layer_init(
+                nn.Linear(last_hidden, self.heads['continuous']['size']),
+                std=0.01
+            )
+        
+        self.to(self.device)
+    
+    def _build_network_layers(self, network_type, activation):
+        """Build layers for a specific network (discrete or continuous)"""
+        layers = []
+        
+        # First layer
+        first_layer = self.lazy_layer_init(
+            nn.LazyLinear(self.hidden_layers[0]),
+            std=2**0.5
+        )
+        layers.append(first_layer)
+        layers.append(getattr(nn, activation)())
+        
+        if self.dropout_rate > 0:
+            layers.append(nn.Dropout(self.dropout_rate))
+        
+        # Hidden layers
+        for i in range(1, len(self.hidden_layers)):
+            if self.use_batch_norm:
+                layers.append(nn.BatchNorm1d(self.hidden_layers[i-1]))
+            
+            layer = self.layer_init(
+                nn.Linear(self.hidden_layers[i-1], self.hidden_layers[i]),
+                std=2**0.5
+            )
+            layers.append(layer)
+            layers.append(getattr(nn, activation)())
+            
+            if self.dropout_rate > 0:
+                layers.append(nn.Dropout(self.dropout_rate))
+        
+        return layers
+    
+    def forward(self, x, process_state=True):
+        if process_state:
+            x = x['store_inventories']
+            x = x.flatten(start_dim=1)
+        
+        outputs = {}
+        
+        # Process discrete network
+        if 'discrete' in self.heads and self.heads['discrete']['enabled']:
+            discrete_features = self.discrete_net(x)
+            outputs['discrete'] = self.discrete_head(discrete_features).unsqueeze(1)
+        
+        # Process continuous network
+        if 'continuous' in self.heads and self.heads['continuous']['enabled']:
+            continuous_features = self.continuous_net(x)
+            continuous_output = self.continuous_head(continuous_features).unsqueeze(1)
+            
+            # Apply scale and shift
+            outputs['continuous'] = continuous_output * self.continuous_scale + self.continuous_shift
+            # outputs['continuous'] = continuous_output * self.continuous_scale + self.continuous_shift + 20.0
+        
         return outputs
 
 class HybridPolicySS(HybridPolicy):
@@ -994,6 +1080,7 @@ class NeuralNetworkCreator:
             'hybrid_policy': HybridPolicy,
             'hybrid_policy_ss': HybridPolicySS,
             'factored_policy': FactoredPolicy,
+            'separate_network_policy': SeparateNetworkPolicy,
             }
         return architectures[name]
     

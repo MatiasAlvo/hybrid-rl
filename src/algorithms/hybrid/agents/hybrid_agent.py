@@ -121,7 +121,6 @@ class BaseAgent(nn.Module):
         policy_class = NeuralNetworkCreator().get_architecture("factored_policy")
         return policy_class(policy_params, device=self.device)
 
-
 class HybridAgent(BaseAgent):
     """
     Original hybrid agent with:
@@ -248,6 +247,35 @@ class HybridAgent(BaseAgent):
     def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
         """
         Get logits, value, and entropy for PPO
+        """
+        # Get policy outputs
+        raw_outputs = self.policy(processed_observation, process_state=False)
+        
+        # Use the SAME processing as in forward pass
+        # Reshape logits to 2D for Categorical (batch_size*n_stores, n_discrete)
+        original_shape = raw_outputs['discrete'].shape
+        reshaped_logits = raw_outputs['discrete'].reshape(-1, raw_outputs['discrete'].size(-1))
+        
+        # Create categorical distribution (same as process_discrete_output)
+        distribution = torch.distributions.Categorical(logits=reshaped_logits)
+        
+        # Reshape action indices to match reshaped logits
+        reshaped_action_indices = discrete_action_indices.reshape(-1)
+        
+        # Get log probabilities using the distribution (this applies normalization)
+        log_probs = distribution.log_prob(reshaped_action_indices)
+        
+        # Reshape back to original format
+        logits = log_probs.reshape(original_shape[:-1])
+        
+        value = self.value_net(processed_observation.detach(), process_state=False) if self.value_net else None
+        entropy = self.get_entropy(raw_outputs['discrete'])
+        
+        return logits, value, entropy
+    
+    def get_log_probs_value_and_entropy_old(self, processed_observation, discrete_action_indices, continuous_samples=None):
+        """
+        Get logits, value, and entropy for PPO
         
         Args:
             processed_observation: Processed observation tensor
@@ -287,7 +315,7 @@ class HybridAgent(BaseAgent):
             'policy_gradient': True,   # For discrete actions
             'value': True,             # For PPO advantage estimation
             'pathwise': True,          # For continuous actions
-            'entropy': False            # For exploration
+            'entropy': True            # For exploration
         }
 
 class FactoredHybridAgent(HybridAgent):
@@ -369,6 +397,7 @@ class FactoredHybridAgent(HybridAgent):
         }
 
     def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+        raise NotImplementedError("check that normalization of the logits is correct")
         """Get logits, value, and entropy for PPO (only for discrete part)"""
         # Get discrete logits
         discrete_logits = self.policy.get_discrete_output(processed_observation)
@@ -607,6 +636,7 @@ class FactoredGumbelSoftmaxAgent(GumbelSoftmaxAgent):
             'value': value,
             'raw_outputs': raw_outputs
         }   
+  
 class ContinuousOnlyAgent(BaseAgent):
     """
     Approach 2: Only using continuous actions, and approximating discontinuities 
@@ -705,7 +735,6 @@ class ContinuousOnlyAgent(BaseAgent):
             'entropy': False            # For exploration
         }
 
-
 class GaussianPPOAgent(HybridAgent):
     """
     Approach 3: Use discrete actions and randomized continuous actions.
@@ -788,6 +817,7 @@ class GaussianPPOAgent(HybridAgent):
         return 0.5 + 0.5 * torch.log(2 * torch.tensor(torch.pi, device=log_std.device)) + log_std
     
     def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+        raise NotImplementedError("check that normalization of the logits is correct")
         """
         Get combined log probabilities (discrete + continuous), value, and entropy for PPO
         
@@ -867,7 +897,6 @@ class GaussianPPOAgent(HybridAgent):
             params.append(self.log_std)
         return params
     
-
 class FactoredGaussianPPOAgent(GaussianPPOAgent):
     """
     Agent that uses a factored approach to hybrid actions:
@@ -972,6 +1001,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         return params
     
     def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+        raise NotImplementedError("check that normalization of the logits is correct")
         """
         Get combined log probabilities (discrete + continuous), value, and entropy for PPO
         
@@ -1032,6 +1062,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         return total_logits.unsqueeze(-1), value, total_entropy
 
     def get_log_probs_value_and_entropy_old(self, processed_observation, discrete_action_indices, continuous_samples=None):
+        raise NotImplementedError("check that normalization of the logits is correct")
         """
         Calculate log probabilities, value estimates, and entropy for PPO updates
         

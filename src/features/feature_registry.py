@@ -136,6 +136,7 @@ class FeatureRegistry:
         
         # Apply straight-through gradient estimation if requested
         if straight_through and not argmax:  # Only apply when not using argmax
+            raise ValueError("Not supposed to reach this block")
             # Get hard one-hot encoding (forward pass)
             indices = torch.argmax(discrete_probs, dim=-1, keepdim=True)
             hard_probs = torch.zeros_like(discrete_probs).scatter_(-1, indices, 1.0)
@@ -212,7 +213,7 @@ class FeatureRegistry:
                 raw_continuous_samples = continuous_mean + continuous_std * epsilon
             
             # Process the continuous values
-            continuous_values = self.range_manager.get_scaled_continuous_values(raw_continuous_samples)
+            continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
             continuous_values = self.range_manager.scale_continuous_by_ranges(
                 continuous_values,
                 self.range_manager.get_continuous_ranges()
@@ -297,7 +298,9 @@ class FeatureRegistry:
                 continuous_log_probs = selected_continuous_log_probs.sum(dim=-1)
         
         # Process the continuous values through range scaling
-        continuous_values = self.range_manager.get_scaled_continuous_values(raw_continuous_samples)
+        raw_continuous_samples = raw_continuous_samples
+        # raw_continuous_samples = raw_continuous_samples + 37.0
+        continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
         continuous_values = self.range_manager.scale_continuous_by_ranges(
             continuous_values,
             self.range_manager.get_continuous_ranges()

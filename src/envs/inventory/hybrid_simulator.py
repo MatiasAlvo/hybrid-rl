@@ -8,10 +8,12 @@ class HybridSimulator(Simulator):
     Simulator for hybrid action spaces in inventory control.
     Supports various cost structures and transition dynamics through modular components.
     """
-    def __init__(self, feature_registry, device='cpu'):
+    def __init__(self, feature_registry, model=None, device='cpu'):
         super().__init__(device)
         self.feature_registry = feature_registry
-        self.action_ranges = self.feature_registry.get_simulator_config()
+        self.model = model
+        # self.action_ranges = self.feature_registry.get_simulator_config()
+
         
         # Initialize dictionaries for cost and transition functions
         self.cost_functions = {}
@@ -97,7 +99,7 @@ class HybridSimulator(Simulator):
         inventory_on_hand = inventory[:, :, 0]
         post_inventory_on_hand = inventory_on_hand - current_demands
         
-        # 3. Calculate variable costs following base simulator pattern
+        # 3. Calculate variable costs
         if self.maximize_profit:
             base_costs = (
                 -observation['underage_costs'] * torch.minimum(inventory_on_hand, current_demands) + 

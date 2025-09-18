@@ -1,19 +1,21 @@
 from src import torch, logging, Path, np
-from src.envs.inventory.env import InventoryEnv
-from src.algorithms.hdpo.collectors.collector import InventoryCollector
-from src.algorithms.hdpo.losses.pathwise import HDPOLoss
-from src.envs.base_env import BaseEnvironment
-from src.algorithms.base import BaseAlgorithm
-from src.data.data_handling import Dataset
-from typing import Dict, Optional, Tuple
+# from src.envs.inventory.env import InventoryEnv
+# from src.algorithms.hdpo.collectors.collector import InventoryCollector
+# from src.algorithms.hdpo.losses.pathwise import HDPOLoss
+# from src.envs.base_env import BaseEnvironment
+# from src.algorithms.base import BaseAlgorithm
+# from src.data.data_handling import Dataset
+# from typing import Dict, Optional, Tuple
 import os
 import copy
 import datetime
 import matplotlib.pyplot as plt
 from src.utils.logger import Logger
-import yaml
+# import yaml
 import pandas as pd
 import wandb
+import io
+from PIL import Image
 
 
 class Trainer():
@@ -122,6 +124,13 @@ class Trainer():
                         epoch, 
                         dev_loss=dev_metrics['loss/reported']
                     )
+                    
+                    # Generate and log inventory vs value plot for dev set with dev loss
+                    self.log_inventory_value_plot(
+                        dev_metrics['trajectory_data'], 
+                        epoch, 
+                        dev_loss=dev_metrics['loss/reported']
+                    )
                 
                 self.logger.flush_metrics()
             
@@ -207,9 +216,9 @@ class Trainer():
         """
         
         epoch_loss = 0
-        epoch_loss_to_report = 0
+        epoch_loss_to_report = 0 # since we ignore the first periods, we don't want to report the loss for the first periods
         total_samples = len(data_loader.dataset)
-        periods_tracking_loss = periods - ignore_periods
+        periods_tracking_loss = periods - ignore_periods # since we ignore the first periods, we subtract the number of ignored periods from the total number of periods
         
         optimizer_metrics_sum = None
         num_batches = 0
@@ -234,8 +243,7 @@ class Trainer():
                 loss_function, simulator, model, periods, problem_params, data_batch, observation_params, 
                 ignore_periods, discrete_allocation, collect_trajectories=True, train=train,
                 collect_additional_data=collect_additional_data
-            )
-            
+            )            
             
             # Collect action distribution data for histograms
             if batch_action_data:
@@ -252,6 +260,7 @@ class Trainer():
             
             # If training, get optimizer metrics but don't use them for loss tracking
             if train and model.trainable:
+                # pass trajectory data to optimizer, which computes gradient and updates parameters
                 batch_metrics = optimizer_wrapper.optimize(batch_trajectory_data)
                 
                 # Handle special metrics (like histograms) that shouldn't be averaged
@@ -787,12 +796,6 @@ class Trainer():
             if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
                 return
             
-            import matplotlib.pyplot as plt
-            import numpy as np
-            import io
-            from PIL import Image
-            import wandb
-            
             # Check if we have the necessary data
             if "observations" not in trajectory_data or "total_action" not in trajectory_data:
                 print("Missing required data for inventory-action plot")
@@ -900,4 +903,118 @@ class Trainer():
             
         except Exception as e:
             print(f"Error generating inventory-action plot: {e}")
+
+    def log_inventory_value_plot(self, trajectory_data, epoch, dev_loss=None):
+        """
+        Generate and log a plot showing the relationship between inventory and value agent outputs to wandb.
+        
+        Args:
+            trajectory_data: Dictionary containing trajectory information
+            epoch: Current epoch number
+            dev_loss: Optional dev loss to include in the title
+        """
+        try:
+            # Skip if logger is not available
+            if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
+                return
+            
+            # Check if we have the necessary data
+            if "observations" not in trajectory_data or "values" not in trajectory_data:
+                print("Missing required data for inventory-value plot")
+                return
+            
+            # Get shapes: [T, B, F] for observations, [T, B, 1] for values
+            T, B, _ = trajectory_data["observations"].shape
+            
+            # Limit the number of samples to plot
+            n_samples = min(30, B)
+            
+            # Select random batch indices first
+            random_batch_indices = torch.randperm(B)[:n_samples]
+            
+            # Select the samples for each tensor
+            selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
+            selected_values = trajectory_data["values"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+            
+            # Get discrete action indices if available for coloring
+            has_discrete_actions = "discrete_action_indices" in trajectory_data
+            if has_discrete_actions:
+                selected_discrete_actions = trajectory_data["discrete_action_indices"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+                # Flatten and convert to numpy
+                discrete_actions_flat = selected_discrete_actions.reshape(-1).detach().cpu().numpy()
+            
+            # Flatten time and batch dimensions for plotting
+            # Reshape to [T*n_samples, F] and [T*n_samples, 1]
+            inventories_flat = selected_inventories.reshape(-1, selected_inventories.shape[-1]).detach().cpu()
+            values_flat = selected_values.reshape(-1, 1).detach().cpu()
+            
+            # Calculate inventory sums (sum across feature dimension)
+            inventory_sum = inventories_flat.sum(dim=1).numpy()
+            value_outputs = values_flat.squeeze().numpy()
+            
+            # Create the plot with larger figure size
+            plt.figure(figsize=(16, 10))
+            
+            # Color points by discrete action if available
+            if has_discrete_actions:
+                # Get unique discrete actions for coloring
+                unique_actions = np.unique(discrete_actions_flat)
+                
+                # Create a colormap with distinct colors
+                if len(unique_actions) <= 10:
+                    # For few actions, use tab10 colormap
+                    cmap = plt.colormaps['tab10']
+                else:
+                    # For many actions, use hsv colormap
+                    cmap = plt.colormaps['hsv']
+                
+                # Plot each discrete action with a different color
+                for i, action in enumerate(unique_actions):
+                    # Fix boolean mask conversion warning by explicitly converting to integer indices
+                    mask = np.where(discrete_actions_flat == action)[0]
+                    plt.scatter(
+                        inventory_sum[mask], 
+                        value_outputs[mask], 
+                        alpha=0.8, 
+                        s=30,  # Larger points for better visibility
+                        color=cmap(i % cmap.N),  # Use modulo to ensure we don't exceed colormap range
+                        label=f'Action {int(action)}'
+                    )
+            else:
+                # If no discrete actions, use a single color
+                plt.scatter(inventory_sum, value_outputs, alpha=0.7, s=50)
+            
+            # Add dev loss to title if provided
+            title = f'Inventory vs Value Agent Outputs (Epoch {epoch})'
+            if dev_loss is not None:
+                title += f' - Dev Loss: {dev_loss:.4f}'
+            
+            # Use larger font sizes for better readability
+            plt.title(title, fontsize=18)
+            plt.xlabel('Total Inventory', fontsize=16)
+            plt.ylabel('Value Agent Output', fontsize=16)
+            plt.xticks(fontsize=14)
+            plt.yticks(fontsize=14)
+            
+            # Add legend with reasonable size and position
+            if has_discrete_actions and len(unique_actions) <= 10:  # Only show legend if not too many actions
+                plt.legend(fontsize=12, loc='best', framealpha=0.7)
+            
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            
+            # Convert plot to image with higher DPI for better quality
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            img = Image.open(buf)
+            
+            # Log to wandb directly through current_metrics
+            self.logger.current_metrics['inventory_value_plot'] = wandb.Image(img)
+            
+            # Close the plot to free memory
+            plt.close()
+            
+        except Exception as e:
+            print(f"Error generating inventory-value plot: {e}")
 

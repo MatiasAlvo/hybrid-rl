@@ -210,12 +210,12 @@ S = 62
 # K = 80
 # Average Cost: 40.83
 
-for K in [30, 40, 50, 60, 64, 70, 80]:
+for K in [1, 30, 40, 50, 60, 64, 70, 80]:
     print(f"K = {K}")
     # print(c(s, S, h, p, lambd, K, L))
 
     s_star, S_star, c_star = find_optimal_policy(h, p, lambd, K, L)
-    # print(f"Optimal policy: s* = {s_star}, S* = {S_star}")
+    print(f"Optimal policy: s* = {s_star}, S* = {S_star}")
     print(f"Average Cost: {c_star:.2f}")
     cost_check = simulate_inventory(p, h, lambd, K, s, S, L)
     # if difference is too large, print the difference

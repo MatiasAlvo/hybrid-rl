@@ -286,14 +286,14 @@ class RangeManager:
                 activation_types.append('softplus')
             else:
                 activation_types.append('sigmoid')
-        
+        print(f'activation_types: {activation_types}')
         self.activation_types = activation_types
     
     def _precompute_continuous_scale_factors(self):
         """Pre-compute shift and scale factors for continuous value scaling"""
         if not self.ranges:
-            self.continuous_shifts = None
-            self.continuous_scales = None
+            self.post_activation_shifts = None
+            self.post_activation_scales = None
             return
         
         shifts = []
@@ -309,10 +309,10 @@ class RangeManager:
                 scales.append(1.0)
         
         # Use float32 explicitly to match PyTorch's default dtype
-        self.continuous_shifts = torch.tensor(shifts, device=self.device, dtype=torch.float32)
-        self.continuous_scales = torch.tensor(scales, device=self.device, dtype=torch.float32)
+        self.post_activation_shifts = torch.tensor(shifts, device=self.device, dtype=torch.float32)
+        self.post_activation_scales = torch.tensor(scales, device=self.device, dtype=torch.float32)
     
-    def get_scaled_continuous_values(self, raw_values):
+    def apply_activations(self, raw_values):
         """
         Scale continuous values using appropriate activation functions:
         - sigmoid for ranges with finite upper bounds
@@ -329,8 +329,8 @@ class RangeManager:
             if activation_type == 'sigmoid':
                 activated_values[..., i] = torch.sigmoid(raw_values[..., i])
             else:  # softplus
-                activated_values[..., i] = raw_values[..., i]
-                # activated_values[..., i] = F.softplus(raw_values[..., i])
+                # activated_values[..., i] = raw_values[..., i]
+                activated_values[..., i] = F.softplus(raw_values[..., i])
         
         return activated_values
     
@@ -347,7 +347,7 @@ class RangeManager:
             return None
         
         # Use pre-computed shift and scale factors for vectorized operation
-        return continuous_values * self.continuous_scales + self.continuous_shifts
+        return continuous_values * self.post_activation_scales + self.post_activation_shifts
     
     def compute_feature_actions(self, discrete_probs, continuous_values):
         """
@@ -369,10 +369,44 @@ class RangeManager:
             
             # For each range of this feature
             for range_idx, sub_range_indices in enumerate(mapping['range_indices']):
+
+                # In range_manager.py around line 376, replace the failing line with:
+
+                if (torch.isnan(discrete_probs).any() or torch.isnan(continuous_values).any() or 
+                    torch.isinf(discrete_probs).any() or torch.isinf(continuous_values).any()):
+                    
+                    print("=== NaN/Inf DETECTED IN RANGE_MANAGER ===")
+                    print(f"discrete_probs has NaN: {torch.isnan(discrete_probs).any()}")
+                    print(f"discrete_probs has Inf: {torch.isinf(discrete_probs).any()}")
+                    print(f"continuous_values has NaN: {torch.isnan(continuous_values).any()}")
+                    print(f"continuous_values has Inf: {torch.isinf(continuous_values).any()}")
+                    print(f"discrete_probs shape: {discrete_probs.shape}")
+                    print(f"continuous_values shape: {continuous_values.shape}")
+                    print(f"sub_range_indices: {sub_range_indices}")
+                    # raise ValueError("NaN/Inf detected before range_manager operation")
+
+                # Check for index bounds (fixed for list)
+                if isinstance(sub_range_indices, list) and sub_range_indices:
+                    max_idx = max(sub_range_indices)
+                    min_idx = min(sub_range_indices)
+                    if (max_idx >= discrete_probs.shape[-1] or 
+                        max_idx >= continuous_values.shape[-1] or 
+                        min_idx < 0):
+                        
+                        print("=== INDEX OUT OF BOUNDS DETECTED ===")
+                        print(f"sub_range_indices range: [{min_idx}, {max_idx}]")
+                        print(f"discrete_probs max valid index: {discrete_probs.shape[-1] - 1}")
+                        print(f"continuous_values max valid index: {continuous_values.shape[-1] - 1}")
+                        # raise ValueError("Index out of bounds in range_manager")
+
+                # Original operation
+                sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
+
                 # Sum over the sub-ranges that correspond to this range
                 # (this correspondence was pre-computed in _precompute_feature_range_mappings)
                 sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
-                feature_action[..., range_idx] = torch.clamp(torch.sum(sub_actions, dim=-1, keepdim=False), min=0)
+                feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
+                # feature_action[..., range_idx] = torch.clamp(torch.sum(sub_actions, dim=-1, keepdim=False), min=0)
 
                 # feature_action[..., range_idx] = torch.sum(sub_actions, dim=-1, keepdim=False)
                 feature_discrete[..., range_idx] = torch.sum(discrete_probs[..., sub_range_indices], dim=-1, keepdim=False)

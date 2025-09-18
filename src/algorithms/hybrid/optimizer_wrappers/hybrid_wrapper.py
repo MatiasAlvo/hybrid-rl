@@ -1,4 +1,3 @@
-from src.algorithms.common.optimizer_wrappers.base_wrapper import BaseOptimizerWrapper
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,10 +6,39 @@ import numpy as np
 import gc
 import wandb
 
+import torch
+import torch.nn.functional as F
+
+class BaseOptimizerWrapper:
+    """Base optimizer wrapper with all possible optimization methods"""
+    def __init__(self, model, optimizer, device='cpu'):
+        self.model = model
+        self.optimizer = optimizer
+        self.device = device
+    
+    def compute_policy_loss(self, log_probs, advantages):
+        """Policy gradient loss"""
+        return -(log_probs * advantages).mean()
+    
+    def compute_value_loss(self, values, returns):
+        """Value function loss"""
+        return F.mse_loss(values, returns)
+    
+    def compute_entropy_loss(self, distribution):
+        """Entropy bonus loss"""
+        return -distribution.entropy().mean()
+    
+    def clip_gradients(self, max_grad_norm):
+        """Gradient clipping utility"""
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
+    
+    def optimize(self, trajectory_data, rewards):
+        """Each algorithm implements its specific optimization logic"""
+        raise NotImplementedError 
+
 class HybridWrapper(BaseOptimizerWrapper):
-    def __init__(self, model, optimizer, gradient_clip=None, weight_decay=0.0, device='cpu', ppo_params=None):
+    def __init__(self, model, optimizer, device='cpu', ppo_params=None):
         super().__init__(model, optimizer, device)
-        self.gradient_clip = gradient_clip
         self.ppo_params = ppo_params or {}  # Use empty dict if no params provided
         # self.epoch_count = 0
         
@@ -22,14 +50,16 @@ class HybridWrapper(BaseOptimizerWrapper):
         trajectory_data = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                           for k, v in trajectory_data.items()}
 
-        # Process and prepare trajectory data
+        # detach the observations
+        trajectory_data['observations'] = trajectory_data['observations']
+        # flip the sign of the rewards
+        trajectory_data['rewards'] = -trajectory_data['rewards']
+
+        # Process and prepare trajectory data (mostly parameters that will be used in training)
         processed_data = self._prepare_trajectory_data(trajectory_data)
         
         # Compute advantages and returns only if needed
         advantages, returns = None, None
-        # print the epoch
-        # print(f"Epoch: {self.epoch_count}")
-        # self.epoch_count += 1
         if self.required_losses['policy_gradient'] or self.required_losses['value']:
             advantages, returns = self.compute_advantages(trajectory_data)
         
@@ -39,7 +69,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Compute pre-training diagnostics only if value network is used
         diagnostics = {}
         if self.required_losses['value'] and 'values' in trajectory_data:
-            diagnostics = self._compute_diagnostics(trajectory_data, returns, tensors)
+            diagnostics = self._compute_diagnostics(trajectory_data, returns, tensors, processed_data)
         
         # Train the model
         training_metrics = self._train_model(tensors, processed_data)
@@ -57,22 +87,23 @@ class HybridWrapper(BaseOptimizerWrapper):
         processed_data = {}
         
         # Extract PPO parameters
-        processed_data['clip_coef'] = self.ppo_params.get('clip_coef', 0.2)
-        processed_data['num_ppo_epochs'] = self.ppo_params.get('num_epochs', 1)
-        processed_data['target_kl'] = self.ppo_params.get('target_kl', None)
-        # processed_data['target_kl'] = self.ppo_params.get('target_kl', 0.015)
-        processed_data['pathwise_coef'] = self.ppo_params.get('pathwise_coef', 0.5)
-        processed_data['norm_adv'] = self.ppo_params.get('normalize_advantages', True)
+        # Extract PPO parameters - all required, no defaults
+        processed_data['clip_coef'] = self.ppo_params['clip_coef']
+        processed_data['num_ppo_epochs'] = self.ppo_params['num_epochs']
+        processed_data['pathwise_coef'] = self.ppo_params['pathwise_coef']
+        processed_data['norm_adv'] = self.ppo_params['normalize_advantages']
+        processed_data['vf_coef'] = self.ppo_params['value_function_coef']
+        processed_data['max_grad_norm'] = self.ppo_params['max_grad_norm']
+
+        # PPO parameters with defaults
+        processed_data['target_kl'] = self.ppo_params.get('target_kl', 0.015)
         processed_data['clip_vloss'] = self.ppo_params.get('clip_value_loss', False)
-        processed_data['ent_coef'] = self.ppo_params.get('entropy_coef', 0.01)
-        processed_data['vf_coef'] = self.ppo_params.get('value_function_coef', 0.5)
-        processed_data['max_grad_norm'] = self.ppo_params.get('max_grad_norm', 1000000)
-        # processed_data['max_grad_norm'] = self.ppo_params.get('max_grad_norm', 0.5)
-        
+        processed_data['ent_coef'] = self.ppo_params['entropy_coef']
+       
         # Create a copy of rewards for pathwise computation only if needed
         if self.required_losses['pathwise']:
             processed_data['pathwise_rewards'] = trajectory_data['rewards'].clone()
-            if self.ppo_params.get('reward_scaling_pathwise', True):
+            if self.ppo_params['reward_scaling_pathwise']:
                 rewards_std = processed_data['pathwise_rewards'].std().detach()
                 if rewards_std > 0:
                     processed_data['pathwise_rewards'] = processed_data['pathwise_rewards'] / (rewards_std + 1e-8)
@@ -140,14 +171,15 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         return tensors
 
-    def _compute_diagnostics(self, trajectory_data, returns, tensors):
+    def _compute_diagnostics(self, trajectory_data, returns, tensors, processed_data):
         """Compute pre-training diagnostics and correlation metrics."""
         # Skip diagnostics if value function is not used
         if not self.required_losses['value'] or 'values' not in trajectory_data:
             return {}
         
         with torch.no_grad():
-            effective_slice = tensors['observations'].shape[0] // tensors['returns'].shape[0] if 'returns' in tensors else slice(None)
+            # effective_slice = tensors['observations'].shape[0] // tensors['returns'].shape[0] if 'returns' in tensors else slice(None)
+            effective_slice = processed_data['effective_slice']
             flat_values = trajectory_data['values'][effective_slice].reshape(-1)
             flat_returns = returns[effective_slice].reshape(-1)
             
@@ -219,6 +251,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Training parameters
         batch_size = tensors['observations'].shape[0]
+        # batch indices
         b_inds = torch.arange(batch_size, device=self.device)
         num_ppo_epochs = processed_data['num_ppo_epochs']
         
@@ -246,12 +279,14 @@ class HybridWrapper(BaseOptimizerWrapper):
             # For first epoch, use full batch
             current_minibatch_size = batch_size if epoch == 0 else batch_size // self.ppo_params.get('num_minibatches', 4)
             
+            # shuffle batch indices
             perm = torch.randperm(batch_size, device=self.device)
             b_inds = b_inds[perm]
             
             # Track approx_kl for the epoch
             approx_kl = None
             
+            # minibatch loop
             for start in range(0, batch_size, current_minibatch_size):
                 end = start + current_minibatch_size
                 mb_inds = b_inds[start:end]
@@ -259,7 +294,7 @@ class HybridWrapper(BaseOptimizerWrapper):
                 # Get minibatch data
                 mb_data = self._get_minibatch(tensors, mb_inds)
                 
-                # Compute losses
+                # Compute losses ALREADY MULTIPLIED by the coefficients
                 policy_loss, value_loss, entropy_loss, pathwise_loss, metrics = self._compute_losses(
                     mb_data, 
                     processed_data, 
@@ -267,19 +302,24 @@ class HybridWrapper(BaseOptimizerWrapper):
                 )
                 
                 # Update metrics
-                clipfrac = metrics['clipfrac']
-                approx_kl = metrics['approx_kl']
+                clipfrac = metrics['clipfrac'] # fraction of action logits that were clipped
+                approx_kl = metrics['approx_kl'] # KL divergence between new and old policy
                 
                 # Store first metrics
                 if first_clipfrac is None:
                     first_clipfrac = clipfrac
+                    if first_clipfrac > 0.0001:
+                        raise ValueError("First clipfrac is greater than 0.0")
                     first_approx_kl = approx_kl.item()
+                    if first_approx_kl > 0.0001:
+                        print(f"First approx_kl: {first_approx_kl}")
+                        raise ValueError("First approx_kl is greater than 0.0")
                     
                 # Update last metrics
                 last_clipfrac = clipfrac
                 last_approx_kl = approx_kl.item()
                 
-                # Check gradient information on first pass
+                # Check gradient information on first pass (note that losses are already multiplied by the coefficients)
                 if epoch == 0 and start == 0:
                     gradient_metrics = self._analyze_gradients(
                         policy_loss, 
@@ -306,13 +346,15 @@ class HybridWrapper(BaseOptimizerWrapper):
                         gradient_metrics[k].append(v)
                 
                 # After first epoch's update, detach observations and pathwise rewards
+                # this is because pathwise gradients can only be used once, or otherwise an error is raised
                 if epoch == 0 and start + current_minibatch_size >= batch_size:
                     tensors['observations'] = tensors['observations'].detach()
                     if 'pathwise_rewards' in processed_data:
                         processed_data['pathwise_rewards'] = processed_data['pathwise_rewards'].detach()
                 
                 # Update totals
-                total_loss += policy_loss.item() + value_loss.item() * processed_data['vf_coef'] + pathwise_loss.item() * processed_data['pathwise_coef']
+                # note that we are now considering entropy loss in the total loss!!
+                total_loss += policy_loss.item() + value_loss.item() + pathwise_loss.item() - entropy_loss.item()
                 total_v_loss += value_loss.item()
                 total_pg_loss += policy_loss.item()
                 total_entropy_loss += entropy_loss.item()
@@ -320,7 +362,8 @@ class HybridWrapper(BaseOptimizerWrapper):
                 clipfracs.append(clipfrac)
                 approx_kls.append(approx_kl.item())
                 
-                # Check for early stopping
+                # Check for early stopping criteria
+                # if the approx KL divergence is greater than the target KL threshold, stop training
                 if processed_data['target_kl'] is not None and approx_kl > processed_data['target_kl']:
                     early_stop_epoch = epoch
                     early_stop_batch = (batch_size // current_minibatch_size) - 1  # Last batch of the epoch
@@ -454,7 +497,8 @@ class HybridWrapper(BaseOptimizerWrapper):
             clip_coef = processed_data['clip_coef']
             pg_loss1 = mb_advantages * ratio
             pg_loss2 = mb_advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-            policy_loss = torch.max(pg_loss1, pg_loss2).mean()
+            # policy_loss = torch.max(pg_loss1, pg_loss2).mean()
+            policy_loss = -torch.min(pg_loss1, pg_loss2).mean()
             
             # Compute clipping fraction for diagnostics
             metrics['clipfrac'] = ((ratio - 1.0).abs() > clip_coef).float().mean().item()
@@ -474,15 +518,30 @@ class HybridWrapper(BaseOptimizerWrapper):
                 res = (newvalue.squeeze() - mb_data['returns'].detach())
                 res_squared = res ** 2
                 value_loss = 0.5 * ((newvalue.squeeze() - mb_data['returns'].detach()) ** 2).mean()
+            value_loss = processed_data['vf_coef'] * value_loss
+
+            self.optimizer.zero_grad()
+            value_loss.backward(retain_graph=True)
+
+            cont_nonzero = []
+            for n, p in self.model.named_parameters():
+                if ('continuous' in n) and (p.grad is not None):
+                    if p.grad.abs().max().item() > 0:
+                        cont_nonzero.append((n, p.grad.abs().mean().item()))
+
+            assert len(cont_nonzero) == 0, f"Continuous params got grad from policy term: {cont_nonzero}"
+            self.optimizer.zero_grad()
         
         # Compute entropy loss if needed
         if required_losses['entropy'] and entropy is not None:
             entropy_loss = entropy.mean()
+            entropy_loss = processed_data['ent_coef'] * entropy_loss
         
         # Add pathwise loss component for continuous actions if needed
         if required_losses['pathwise'] and 'pathwise_rewards' in processed_data:
             pathwise_rewards_slice = processed_data['pathwise_rewards'][processed_data['effective_slice']]
-            pathwise_loss = pathwise_rewards_slice.mean()
+            pathwise_loss = - pathwise_rewards_slice.mean()
+            pathwise_loss = processed_data['pathwise_coef'] * pathwise_loss
         
         return policy_loss, value_loss, entropy_loss, pathwise_loss, metrics
 
@@ -530,7 +589,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         """Perform optimization step with only the required losses combined."""
         self.optimizer.zero_grad()
         
-        # Combine only the required losses
+        # Combine only the required losses. Note that losses are already multiplied by the coefficients.
         required_losses = processed_data['required_losses']
         loss = torch.tensor(0.0, device=self.device)
         
@@ -538,13 +597,13 @@ class HybridWrapper(BaseOptimizerWrapper):
             loss = loss + policy_loss
         
         if required_losses['value']:
-            loss = loss + value_loss * processed_data['vf_coef']
+            loss = loss + value_loss
         
         if required_losses['pathwise']:
-            loss = loss + pathwise_loss * processed_data['pathwise_coef']
+            loss = loss + pathwise_loss
         
         if required_losses['entropy']:
-            loss = loss - entropy_loss * processed_data['ent_coef']  # Negative because we want to maximize entropy
+            loss = loss - entropy_loss  # Negative because we want to maximize entropy
         
         # Skip backward if no loss components are used
         grad_metrics = {}
@@ -559,7 +618,61 @@ class HybridWrapper(BaseOptimizerWrapper):
             self.optimizer.step()
         
         return grad_metrics
+    def _clip_gradients_by_component_debug(self, max_grad_norm):
+        """Clip gradients with a fixed maximum norm."""
+        print()
+        print(f"=== CLIP FUNCTION CALLED ===")
+        print(f"max_grad_norm type: {type(max_grad_norm)}")
+        print(f"max_grad_norm value: {max_grad_norm}")
+        # Use a FIXED clipping threshold
+        FIXED_MAX_NORM = 1.0  # or 0.5, or whatever you want
 
+        # Add this right in your clipping function:
+        print("Testing simple clipping:")
+        all_params = [p for p in self.model.parameters() if p.grad is not None]
+        if all_params:
+            # Test 1: Get current norm
+            current_norm = torch.nn.utils.clip_grad_norm_(all_params, float('inf'))
+            print(f"Current total norm: {current_norm}")
+            
+            # Test 2: Try to clip to 1.0
+            clipped_norm = torch.nn.utils.clip_grad_norm_(all_params, 1.0)
+            print(f"After clipping to 1.0: {clipped_norm}")
+            
+            # Test 3: Check if gradients actually changed
+            current_norm_again = torch.nn.utils.clip_grad_norm_(all_params, float('inf'))
+            print(f"Norm after checking again: {current_norm_again}")
+        # Add this to see gradient info:
+        for i, p in enumerate(all_params[:3]):  # Check first 3 parameters
+            if p.grad is not None:
+                print(f"Param {i}: grad shape {p.grad.shape}, grad norm {torch.norm(p.grad)}")
+                print(f"Param {i}: grad has NaN: {torch.isnan(p.grad).any()}")
+                print(f"Param {i}: grad has Inf: {torch.isinf(p.grad).any()}")
+        
+        # Get all parameters with gradients
+        params_with_grad = [p for p in self.model.parameters() if p.grad is not None]
+        print(f"Params with grad: {len(params_with_grad)}")
+        print(f"Params with grad: {params_with_grad}")
+        
+        if not params_with_grad:
+            return {}
+        
+        # Calculate gradient norm before clipping
+        total_norm = torch.norm(torch.stack([torch.norm(p.grad.detach()) for p in params_with_grad]))
+        
+        # Apply clipping with FIXED threshold
+        clipped_norm = torch.nn.utils.clip_grad_norm_(params_with_grad, FIXED_MAX_NORM)
+        
+        print(f"FIXED_MAX_NORM: {FIXED_MAX_NORM}")
+        print(f"grad_norm_before: {total_norm.item()}")
+        print(f"grad_norm_after: {clipped_norm.item()}")
+        
+        return {
+            'grad_norm/total/before': total_norm.item(),
+            'grad_norm/total/after': clipped_norm.item(),
+            'grad_norm/total/clip_ratio': clipped_norm.item() / (total_norm.item() + 1e-8)
+        }
+    
     def _clip_gradients_by_component(self, max_grad_norm):
         """Clip gradients separately for each network component."""
         # Group parameters by network component
@@ -567,7 +680,8 @@ class HybridWrapper(BaseOptimizerWrapper):
             'value': [],
             'backbone': [],
             'continuous': [],
-            'discrete': []
+            'discrete': [],
+            'other': []
         }
         
         # Categorize parameters
@@ -581,7 +695,8 @@ class HybridWrapper(BaseOptimizerWrapper):
                     param_groups['continuous'].append(param)
                 elif 'discrete' in name:
                     param_groups['discrete'].append(param)
-        
+                else:
+                    param_groups['other'].append(param)
         # Track gradient norms for logging
         grad_metrics = {}
         
@@ -594,12 +709,15 @@ class HybridWrapper(BaseOptimizerWrapper):
                 # Skip if no parameters have gradients
                 if not params_with_grad:
                     continue
-                    
-                # Calculate pre-clipping gradient norm
-                grad_norm_before = torch.nn.utils.clip_grad_norm_(params, float('inf'))  # Just compute, don't clip
-                
-                # Apply gradient clipping
-                grad_norm_after = torch.nn.utils.clip_grad_norm_(params, max_grad_norm)  # Actually clip
+
+                # Apply clipping and get the norm before clipping
+                grad_norm_before = torch.nn.utils.clip_grad_norm_(params_with_grad, max_grad_norm)
+
+                # Calculate norm after clipping
+                grad_norms_after = [torch.norm(p.grad.detach()) for p in params_with_grad]
+                grad_norm_after = torch.norm(torch.stack(grad_norms_after))
+
+
                 
                 # Store metrics
                 grad_metrics[f'grad_norm/{group_name}/before'] = grad_norm_before.item()
@@ -632,7 +750,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             return None, None
             
         rewards = trajectory_data['rewards'].clone().detach()
-        if self.ppo_params.get('reward_scaling', False):
+        if self.ppo_params['reward_scaling']:
             rewards_std = rewards.std()
             if rewards_std > 0:
                 rewards = rewards / (rewards_std + 1e-8)
