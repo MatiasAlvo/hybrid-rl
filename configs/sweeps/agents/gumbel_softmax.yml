@@ -1,6 +1,7 @@
 # Gumbel Softmax Agent Sweep Configuration
 config_files:
   hyperparams: 'configs/policies/gumbel_softmax.yml'
+  setting: 'configs/settings/fixed_costs_finite_thresh.yml'
 
 method: 'random'
 metric:
@@ -10,8 +11,8 @@ metric:
 parameters:
   add_gumbel_noise:
     values:
-      - false
       - true
+      - false
   anneal_lr:
     values:
       - true
@@ -20,12 +21,12 @@ parameters:
       - 50
   initial_temperature:
     distribution: uniform
-    max: 1.0
+    max: 1
     min: 0.9
   learning_rate:
     distribution: log_uniform_values
-    max: 1e-02
-    min: 1e-03
+    max: 0.01
+    min: 0.0001
   max_grad_norm:
     distribution: uniform
     max: 10
@@ -34,19 +35,14 @@ parameters:
     distribution: log_uniform_values
     max: 0.2
     min: 0.001
-  normalize_observations:
-    values:
-      - false
   policy_activation:
     values:
       - Tanh
-  pathwise_coef:
-    distribution: log_uniform_values
-    # distribution: uniform
-    max: 100
-    # max: 10
-    min: 0.01
-    # min: 8
+      # - ELU
+      # - ReLU
+  reward_scaling:
+    values:
+      - true
   reward_scaling_pathwise:
     values:
       - true
@@ -56,5 +52,10 @@ parameters:
   use_straight_through:
     values:
       - true
-  normalize_advantages:
-    values: [True]
+  use_wandb:
+    values:
+      - true
+  pathwise_coef:
+    distribution: uniform
+    max: 10
+    min: 8

@@ -174,10 +174,14 @@ class Scenario():
         if seed is not None:
             np.random.seed(seed)
         
+        # Add period_shift to ensure we have enough periods when period_shift is used
+        period_shift = self.observation_params['demand']['period_shift']
+        total_periods = self.periods + period_shift
+        
         if problem_params['n_stores'] == 1:
             demand = np.random.normal(demand_params['mean'], 
                                       demand_params['std'], 
-                                      size=(self.num_samples, 1, self.periods)
+                                      size=(self.num_samples, 1, total_periods)
                                       )
         else:
             # Calculate covariance matrix and sample from multivariate normal
@@ -187,7 +191,7 @@ class Scenario():
                            ] 
                            for j, v2 in enumerate(demand_params['std'])
                            ]
-            demand = np.random.multivariate_normal(demand_params['mean'], cov=cov_matrix, size=(self.num_samples, self.periods))
+            demand = np.random.multivariate_normal(demand_params['mean'], cov=cov_matrix, size=(self.num_samples, total_periods))
             demand = np.transpose(demand, (0, 2, 1))
 
         return demand
@@ -198,7 +202,11 @@ class Scenario():
         if seed is not None:
             np.random.seed(seed)
         
-        return np.random.poisson(demand_params['mean'], size=(self.num_samples, problem_params['n_stores'], self.periods))
+        # Add period_shift to ensure we have enough periods when period_shift is used
+        period_shift = self.observation_params['demand']['period_shift']
+        total_periods = self.periods + period_shift
+        
+        return np.random.poisson(demand_params['mean'], size=(self.num_samples, problem_params['n_stores'], total_periods))
 
     def generate_data(self, demand_params, **kwargs):
         """

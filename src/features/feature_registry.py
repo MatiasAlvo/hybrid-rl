@@ -254,7 +254,7 @@ class FeatureRegistry:
         return action_dict
     
     def process_continuous_output(self, raw_continuous, discrete_action_indices=None, continuous_mean=None, 
-                                 continuous_log_std=None, random_continuous=False):
+                                 continuous_log_std=None, random_continuous=False, random_pathwise_std=None):
         """
         Process network outputs for continuous actions.
         
@@ -264,7 +264,7 @@ class FeatureRegistry:
             continuous_mean: Mean values for Gaussian distribution (if using stochastic policy)
             continuous_log_std: Log standard deviation for Gaussian distribution (if using stochastic policy)
             random_continuous: Whether to sample from Gaussian distribution
-        
+            random_pathwise: Whether to sample from Gaussian distribution and then use the reparameterization trick to get pathwise gradients (used for HybridAgent or GumbelSoftmaxAgent)
         Returns:
             Dictionary containing processed continuous actions and related information
         """
@@ -272,8 +272,17 @@ class FeatureRegistry:
         raw_continuous_samples = raw_continuous
         continuous_log_probs = None
         
-        # If using Gaussian policy, sample from the distribution
-        if random_continuous and continuous_mean is not None and continuous_log_std is not None:
+        # If using random_pathwise_std, sample from standard normal distribution, multiply it by the random_pathwise_std,
+        #  and add it to the raw_continuous_samples. This is used for HybridAgent or GumbelSoftmaxAgent.
+        # inherently uses the reparameterization trick to get pathwise gradients.
+        if random_pathwise_std is not None:
+            continuous_std = random_pathwise_std
+            epsilon = torch.randn_like(raw_continuous_samples, device=raw_continuous_samples.device)
+            raw_continuous_samples = raw_continuous_samples + continuous_std * epsilon
+
+        # If using Gaussian policy, sample from the distribution and save necessary information
+        # for PPO calculations
+        elif random_continuous and continuous_mean is not None and continuous_log_std is not None:
             # Clamp log_std for numerical stability
             continuous_log_std = torch.clamp(continuous_log_std, min=-20, max=2)
             continuous_std = torch.exp(continuous_log_std)
@@ -298,7 +307,7 @@ class FeatureRegistry:
                 continuous_log_probs = selected_continuous_log_probs.sum(dim=-1)
         
         # Process the continuous values through range scaling
-        raw_continuous_samples = raw_continuous_samples
+        # raw_continuous_samples = raw_continuous_samples
         # raw_continuous_samples = raw_continuous_samples + 37.0
         continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
         continuous_values = self.range_manager.scale_continuous_by_ranges(

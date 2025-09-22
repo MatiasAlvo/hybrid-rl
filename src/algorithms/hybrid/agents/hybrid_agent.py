@@ -130,6 +130,8 @@ class HybridAgent(BaseAgent):
     """
     def __init__(self, config, feature_registry=None, device='cpu'):
         super().__init__(config, feature_registry, device)
+        # Store random_pathwise_std parameter
+        self.random_pathwise_std = config['agent_params'].get('random_pathwise_std', None)
         # No additional initialization needed here as the value_net is initialized in BaseAgent
         
     def _init_policy(self, config, random_continuous=False):
@@ -176,14 +178,13 @@ class HybridAgent(BaseAgent):
             sample=True,      # Sample during training
             straight_through=False
         )
-        
+
+
         # Process continuous outputs
         continuous_output = self.feature_registry.process_continuous_output(
             raw_outputs.get('continuous'),
             discrete_action_indices=discrete_output['discrete_action_indices'],
-            continuous_mean=raw_outputs.get('continuous_mean'),
-            continuous_log_std=raw_outputs.get('continuous_log_std'),
-            random_continuous=False  # Default to deterministic continuous actions
+            random_pathwise_std=self.random_pathwise_std  # Use the configured random_pathwise_std
         )
         
         # Compute feature actions

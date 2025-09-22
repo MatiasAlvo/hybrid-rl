@@ -125,6 +125,8 @@ def train_sweep(sweep_config):
                 'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
                 # Add mapping for continuous scale parameter - updated path
                 'continuous_scale': ('hyperparams', ['nn_params', 'policy_network', 'continuous_scale']),
+                'lr_multipliers_discrete': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'discrete']),
+                'random_pathwise_std': ('hyperparams', ['agent_params', 'random_pathwise_std']),
                 'use_wandb': ('hyperparams', ['logging_params', 'use_wandb']),
                 # Add mapping for threshold parameter
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
@@ -142,7 +144,7 @@ def train_sweep(sweep_config):
                     for i, key in enumerate(param_path[:-1]):
                         if isinstance(current, dict):
                             if key not in current:
-                                current[key] = {} if i < len(param_path) - 2 else []
+                                current[key] = {} if isinstance(param_path[i + 1], str) else []
                             current = current[key]
                         elif isinstance(current, list):
                             # Ensure list is long enough

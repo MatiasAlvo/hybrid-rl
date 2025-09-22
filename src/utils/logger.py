@@ -56,7 +56,7 @@ class Logger:
                         # This prevents wandb from creating local files
                         _disable_stats=True,
                         _disable_meta=True,
-                        sync_tensorboard=False,
+                        # sync_tensorboard=False,
                         save_code=False
                     )
                 )

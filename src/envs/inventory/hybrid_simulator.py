@@ -86,6 +86,17 @@ class HybridSimulator(Simulator):
             observation['current_period'].item()
         )
 
+        # Update past data observations (e.g., past_demands) BEFORE updating current period
+        # This follows the same pattern as the regular Simulator
+        if self.observation_params['demand']['past_periods'] > 0:
+            observation['past_demands'] = self.update_past_demands(
+                self._internal_data,
+                self.observation_params,
+                self.batch_size,
+                self.n_stores,
+                current_period=min(observation['current_period'].item() + 1, self._internal_data['demands'].shape[2])
+            )
+
         # Update time related features (e.g., days to christmas)
         self.update_time_features(
             self._internal_data, 

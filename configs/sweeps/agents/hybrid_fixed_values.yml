@@ -1,8 +1,8 @@
-# Hybrid Agent Sweep Configuration
+# Hybrid Agent Fixed Configuration
 config_files:
   hyperparams: 'configs/policies/hybrid.yml'
 
-method: 'random'
+method: 'random'  # Changed to grid since we're using fixed values
 metric:
   name: 'dev/loss/best'
   goal: 'minimize'
@@ -13,46 +13,36 @@ parameters:
       - false
   anneal_lr:
     values:
-      - true
-      - false
+      - true  # FIXED: Clear winner from analysis
   buffer_periods:
     values:
       - 50
   clip_coef:
-    distribution: uniform
-    max: 0.2
-    min: 0.1
+    values:
+      - 0.16  # FIXED: Median of top performers
   fixed_cost:
-    distribution: categorical
     values:
       - 64
   gae_lambda:
-    distribution: uniform
-    max: 0.97
-    min: 0.95
+    values:
+      - 0.96  # FIXED: Standard value that worked well
   gamma:
-    distribution: uniform
-    max: 0.95
-    min: 0.92
+    values:
+      - 0.94  # FIXED: Middle of successful range
   initial_temperature:
-    distribution: log_uniform_values
-    max: 10
-    min: 1
+    values:
+      - 5.0  # FIXED: Middle of successful range
   learning_rate:
-    distribution: log_uniform_values
-    max: 0.005
-    min: 0.0001
+    values:
+      - 0.002  # FIXED: Higher end that worked better
   max_grad_norm:
-    distribution: uniform
-    max: 10
-    min: 5
+    values:
+      - 6.0  # FIXED: Conservative clipping value
   min_temperature:
-    distribution: log_uniform_values
-    max: 0.2
-    min: 0.001
+    values:
+      - 0.05  # FIXED: Low but not extreme
   normalize_advantages:
     values:
-      # - false
       - true
   normalize_observations:
     values:
@@ -61,13 +51,11 @@ parameters:
     values:
       - 5
   pathwise_coef:
-    distribution: log_uniform_values
-    max: 100
-    min: 0.1
+    values:
+      - 12.0  # FIXED: Lower-middle of good range
   policy_activation:
     values:
       - Tanh
-      # - ELU
   reward_scaling:
     values:
       - true
@@ -76,20 +64,16 @@ parameters:
       - true
   use_gae:
     values:
-      # - false
       - true
   value_activation:
     values: 
       - Tanh
-      # - ELU
   value_function_coef:
-    distribution: log_uniform_values
-    max: 0.2
-    min: 0.1
+    values:
+      - 0.12  # FIXED: Standard value that worked
   entropy_coef:
-    distribution: log_uniform_values
-    max: 0.1
-    min: 0.001
+    values:
+      - 0.007  # FIXED: Lower entropy worked better
   continuous_scale:
     values:
       - 1.0

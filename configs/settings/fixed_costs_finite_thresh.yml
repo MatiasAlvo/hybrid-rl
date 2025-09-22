@@ -44,9 +44,9 @@ problem_params:
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
-      'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
+      # 'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
       # 'thresholds': [-0.01, 0.0, 100.0]  # first and last values are the same across all discrete features
-      # 'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
+      'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
       'values': [0.0, 64.0]
 
 observation_params:
@@ -60,7 +60,7 @@ observation_params:
     'mean': False
     'std': False
   'demand': 
-    'past_periods': 16 
+    'past_periods': 0 
     'period_shift': 0
   'include_past_observations':
     'arrivals': 0

@@ -25,10 +25,10 @@ agent_params:
   'min_temperature': 0.001
   'temperature_decay': 1.0
   'use_straight_through': true
-  'add_gumbel_noise': false
+  'add_gumbel_noise': true
 
 optimizer_params:
-  'learning_rate': 0.0015
+  'learning_rate': 0.001
   'anneal_lr': true
   'weight_decay': 0.0
   'gradient_clip': 1.0
@@ -36,6 +36,18 @@ optimizer_params:
     'num_epochs': 1
     'reward_scaling': true
     'reward_scaling_pathwise': true
+    'clip_coef': null
+    'pathwise_coef': 1
+    'normalize_advantages': null
+    'value_function_coef': null
+    'max_grad_norm': null
+    'entropy_coef': null
+    'target_kl': null
+    'clip_value_loss': null
+    'buffer_periods': 10
+    'gamma': null
+    'gae_lambda': null
+    'use_gae': null
 
 nn_params:
   policy_network:
@@ -45,6 +57,8 @@ nn_params:
     activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
+    continuous_scale: 1.0
+    continuous_shift: 1.0
     heads:
       discrete:
         enabled: true

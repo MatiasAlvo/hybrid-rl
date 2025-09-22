@@ -1,6 +1,8 @@
 # Wandb
 wandb/
 *.wandb
+metrics/
+
 
 # Tensorboard
 runs/

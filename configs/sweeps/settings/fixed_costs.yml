@@ -1,12 +1,35 @@
 # Fixed Costs Setting Sweep Configuration
+name: fixed_costs_x10_each
+method: grid
+metric:
+  name: test/loss/reported
+  goal: minimize
+
+# Your existing config file hook is fine to keep
 config_files:
   setting: 'configs/settings/fixed_costs.yml'
 
 parameters:
   normalize_observations:
-    values: [False]
+    values: [false]
+
+  # All the fixed costs you want
   fixed_cost:
-    values: [64]
-    # values: [30, 40, 50, 60, 64, 70, 80]
-    # values: [30, 50, 64, 80]
-    distribution: 'categorical'  # This ensures values are selected uniformly 
+    values: [30, 40, 50, 60, 64, 70]
+
+  # Ten replicas per fixed_cost
+  seed:
+    values: [0,1,2,3,4,5,6,7,8,9]
+
+# # Fixed Costs Setting Sweep Configuration
+# config_files:
+#   setting: 'configs/settings/fixed_costs.yml'
+
+# parameters:
+#   normalize_observations:
+#     values: [False]
+#   fixed_cost:
+#     values: [64]
+#     # values: [30, 40, 50, 60, 64, 70, 80]
+#     # values: [30, 50, 64, 80]
+#     distribution: 'categorical'  # This ensures values are selected uniformly 

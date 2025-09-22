@@ -1,0 +1,12 @@
+# Fixed Costs Setting Sweep Configuration
+config_files:
+  setting: 'configs/settings/fixed_costs_finite_thresh.yml'
+
+parameters:
+  normalize_observations:
+    values: [False]
+  fixed_cost:
+    values: [64]
+    # values: [30, 40, 50, 60, 64, 70, 80]
+    # values: [30, 50, 64, 80]
+    # distribution: 'categorical'  # This ensures values are selected uniformly 

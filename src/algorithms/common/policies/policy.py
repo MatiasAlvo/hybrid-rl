@@ -851,13 +851,15 @@ class HybridPolicy(PolicyNetwork):
         
     def forward(self, x, process_state=True):
         if process_state:
+            # demands = x['past_demands']
             x = x['store_inventories']
+            # x = torch.concat([x, demands], dim=-1)
             x = x.flatten(start_dim=1)
 
         # Get base features
         base_features = self.get_features(x).unsqueeze(1)
-        # concatenate base_features with x
-        base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
+        # # concatenate base_features with x
+        # base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
         
         # Create separate feature paths for each head
         outputs = {}
@@ -868,7 +870,11 @@ class HybridPolicy(PolicyNetwork):
                 continuous_output = self.heads_layers['continuous'](base_features)
                 
                 outputs['continuous'] = continuous_output * self.continuous_scale + self.continuous_shift
-                
+
+                # # multiply continuous_output by the mean demands
+                # continuous_output = continuous_output * demands.mean(dim=2).unsqueeze(2)
+                # continuous_output = 6.0*torch.sigmoid(continuous_output) * demands.mean(dim=2).unsqueeze(2)
+
                 # order = torch.clamp((target_inv - inventory_sum), min=0.0)
                 # continuous_output = outputs['continuous']*0 + order.unsqueeze(1).unsqueeze(2).expand(outputs['continuous'].shape)
                 # print(f'order: {order.shape}')
