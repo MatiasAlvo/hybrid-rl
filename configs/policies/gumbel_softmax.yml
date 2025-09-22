@@ -11,7 +11,7 @@ trainer_params:
   'compute_metrics_on_test': false
 
 logging_params: 
-  'use_wandb': true
+  'use_wandb': false
   'use_tensorboard': false
   'wandb_project_name': "inventory_control"
   'wandb_entity': "alvomatias"
@@ -33,9 +33,19 @@ optimizer_params:
   'weight_decay': 0.0
   'gradient_clip': 1.0
   'ppo_params':
+    'clip_coef': null
+    'gamma': null
+    'gae_lambda': null
+    'normalize_advantages': null
+    'use_gae': null
     'num_epochs': 1
-    'reward_scaling': true
+    'value_function_coef': null
+    'pathwise_coef': 1
     'reward_scaling_pathwise': true
+    'reward_scaling': true
+    'buffer_periods': 10
+    'max_grad_norm': null
+    'entropy_coef': null
 
 nn_params:
   policy_network:
@@ -45,6 +55,8 @@ nn_params:
     activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
+    continuous_scale: 1.0
+    continuous_shift: 1.0
     heads:
       discrete:
         enabled: true

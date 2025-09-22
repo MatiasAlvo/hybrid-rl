@@ -1,0 +1,85 @@
+# Hybrid Agent Fixed Configuration
+config_files:
+  hyperparams: 'configs/policies/hybrid.yml'
+
+method: 'random'  # Changed to grid since we're using fixed values
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  add_gumbel_noise:
+    values:
+      - false
+  anneal_lr:
+    values:
+      - true  # FIXED: Clear winner from analysis
+  buffer_periods:
+    values:
+      - 50
+  clip_coef:
+    values:
+      - 0.16  # FIXED: Median of top performers
+  fixed_cost:
+    values:
+      - 64
+  gae_lambda:
+    values:
+      - 0.96  # FIXED: Standard value that worked well
+  gamma:
+    values:
+      - 0.94  # FIXED: Middle of successful range
+  initial_temperature:
+    values:
+      - 5.0  # FIXED: Middle of successful range
+  learning_rate:
+    values:
+      - 0.002  # FIXED: Higher end that worked better
+  max_grad_norm:
+    values:
+      - 6.0  # FIXED: Conservative clipping value
+  min_temperature:
+    values:
+      - 0.05  # FIXED: Low but not extreme
+  normalize_advantages:
+    values:
+      - true
+  normalize_observations:
+    values:
+      - false
+  num_epochs:
+    values:
+      - 5
+  pathwise_coef:
+    values:
+      - 12.0  # FIXED: Lower-middle of good range
+  policy_activation:
+    values:
+      - Tanh
+  reward_scaling:
+    values:
+      - true
+  reward_scaling_pathwise:
+    values:
+      - true
+  use_gae:
+    values:
+      - true
+  value_activation:
+    values: 
+      - Tanh
+  value_function_coef:
+    values:
+      - 0.12  # FIXED: Standard value that worked
+  entropy_coef:
+    values:
+      - 0.007  # FIXED: Lower entropy worked better
+  continuous_scale:
+    values:
+      - 1.0
+  continuous_shift:
+    values: 
+      - 5.0
+  use_wandb:
+    values:
+      - true
