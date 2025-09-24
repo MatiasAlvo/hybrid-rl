@@ -117,6 +117,7 @@ def train_sweep(sweep_config):
                 'reward_scaling_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling_pathwise']),
                 'max_grad_norm': ('hyperparams', ['optimizer_params', 'ppo_params', 'max_grad_norm']),
                 'entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'entropy_coef']),
+                'clip_by_component': ('hyperparams', ['optimizer_params', 'ppo_params', 'clip_by_component']),
                 # Unified temperature parameters
                 'initial_temperature': ('hyperparams', ['agent_params', 'initial_temperature']),
                 'min_temperature': ('hyperparams', ['agent_params', 'min_temperature']),

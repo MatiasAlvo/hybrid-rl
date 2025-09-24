@@ -17,6 +17,9 @@ parameters:
   buffer_periods:
     values:
       - 50
+  clip_by_component:
+    values:
+      - true
   clip_coef:
     values:
       - 0.16  # FIXED: Median of top performers

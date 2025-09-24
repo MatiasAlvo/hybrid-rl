@@ -24,6 +24,10 @@ parameters:
     values:
       - true
       - false
+  
+  clip_by_component:
+    values:
+      - true
     
   max_grad_norm:
     distribution: uniform

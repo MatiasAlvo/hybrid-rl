@@ -19,6 +19,9 @@ parameters:
   buffer_periods:
     values:
       - 50
+  clip_by_component:
+    values:
+      - true
   initial_temperature:
     distribution: log_uniform_values
     max: 10

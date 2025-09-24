@@ -854,10 +854,58 @@ class HybridPolicy(PolicyNetwork):
             x = x['store_inventories']
             x = x.flatten(start_dim=1)
 
+
+        # DEBUG: assert inputs are finite and not huge
+        if not torch.isfinite(x).all():
+            bad = (~torch.isfinite(x)).nonzero(as_tuple=False)[:5]
+            raise RuntimeError(f"[inputs] non-finite into policy.backbone.0; example_idx={bad.tolist()}")
+
+        # Optional: break on huge (but finite) activations
+        x_absmax = x.detach().abs().max()
+        if x_absmax > 1e4:
+            raise RuntimeError(f"[inputs] absurd magnitude into backbone: max|x|={float(x_absmax):.3e}")
+
+        # ---- guard the first backbone layer's parameters ----
+        def _assert_backbone0_params_ok():
+            lin = self.backbone[0]  # adjust index if different
+            # Skip gracefully if it's a Lazy* layer that isn't materialized yet
+            if hasattr(lin, "has_uninitialized_params") and lin.has_uninitialized_params():
+                return
+
+            W, b = lin.weight, lin.bias
+            # 1) Non-finite check
+            if (not torch.isfinite(W).all()) or (b is not None and not torch.isfinite(b).all()):
+                raise RuntimeError("[weights] policy.backbone.0 has non-finite params")
+
+            # 2) Magnitude guardrails (tune thresholds to your scale)
+            w_max = W.detach().abs().max()
+            b_max = (b.detach().abs().max() if b is not None else torch.tensor(0., device=W.device))
+            if w_max > 1e3 or b_max > 1e5:
+                raise RuntimeError(f"[weights] suspicious magnitude in backbone.0: "
+                                f"max|W|={float(w_max):.3e}, max|b|={float(b_max):.3e}")
+
+        _assert_backbone0_params_ok()
         # Get base features
         base_features = self.get_features(x).unsqueeze(1)
+
+
+        # DEBUG: catch failures at the backbone boundary
+        if not torch.isfinite(base_features).all():
+            bad = (~torch.isfinite(base_features)).nonzero(as_tuple=False)[:5]
+            raise RuntimeError(f"[backbone] non-finite output; example_idx={bad.tolist()}, "
+                            f"max|bf|={float(base_features.detach().abs().max()):.3e}")
+
+
         # concatenate base_features with x
         base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
+
+        # DEBUG: ensure concat didn’t re-introduce huge numbers
+        if not torch.isfinite(base_features).all():
+            bad = (~torch.isfinite(base_features)).nonzero(as_tuple=False)[:5]
+            raise RuntimeError(f"[features] non-finite after concat; idx={bad.tolist()}")
+        bf_absmax = base_features.detach().abs().max()
+        if bf_absmax > 1e4:
+            raise RuntimeError(f"[features] too large after concat: max|bf|={float(bf_absmax):.3e}")
         
         # Create separate feature paths for each head
         outputs = {}

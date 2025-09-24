@@ -46,7 +46,9 @@ problem_params:
     'fixed_ordering_cost': 
       # 'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
       # 'thresholds': [-0.01, 0.0, 100.0]  # first and last values are the same across all discrete features
-      'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
+      'thresholds': [0.0001, 0.0002, 62.0]  # first and last values are the same across all discrete features
+      # 'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
+      # 'thresholds': [-0.1, 0.0, 62.0]  # first and last values are the same across all discrete features
       'values': [0.0, 64.0]
 
 observation_params:

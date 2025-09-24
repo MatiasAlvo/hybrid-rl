@@ -53,6 +53,7 @@ optimizer_params:
     'buffer_periods': 0
     'max_grad_norm': 5.0
     'entropy_coef': 0.0
+    'clip_by_component': true
 
 nn_params:
   policy_network:

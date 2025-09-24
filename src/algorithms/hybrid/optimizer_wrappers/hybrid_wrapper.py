@@ -6,8 +6,75 @@ import numpy as np
 import gc
 import wandb
 
-import torch
-import torch.nn.functional as F
+import os, traceback, logging
+
+# (Optional) richer stack traces from C++ ops
+os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
+
+import traceback, wandb, torch, numpy as np
+
+def backward_with_anomaly(loss, params_named=None, *, tag="train"):
+    """
+    Run backward under anomaly detection.
+    Then scan grads; if any are non-finite, raise to trigger logging.
+    params_named: iterable of (name, param) for better messages.
+                  If None, we only check .parameters() without names.
+    """
+    try:
+        with torch.autograd.detect_anomaly():
+            loss.backward()
+
+        # === POST-BACKWARD GRAD SCAN ===
+        bad = []
+        total = 0
+        if params_named is None:
+            # fallback: no names
+            for p in ():
+                pass  # user must pass args to get checks
+        else:
+            for name, p in params_named:
+                if p.grad is None:
+                    continue
+                total += 1
+                g = p.grad
+                if not torch.isfinite(g).all():
+                    # Summarize what went wrong
+                    has_nan = torch.isnan(g).any().item()
+                    has_inf = torch.isinf(g).any().item()
+                    bad.append({
+                        "name": name,
+                        "shape": tuple(g.shape),
+                        "has_nan": bool(has_nan),
+                        "has_inf": bool(has_inf),
+                        "max_abs": float(g.detach().abs().max().cpu())
+                    })
+
+        if bad:
+            # Emit a compact text block to W&B and raise
+            lines = [f"{b['name']} shape={b['shape']} nan={b['has_nan']} inf={b['has_inf']} max|g|={b['max_abs']:.3e}"
+                     for b in bad[:50]]  # cap to avoid spam
+            msg = "Non-finite gradients detected:\n" + "\n".join(lines)
+            # Log once so it persists if the process dies
+            if wandb.run:
+                wandb.log({f"anomaly/{tag}_nonfinite_grads": msg,
+                           f"anomaly/{tag}_bad_count": len(bad),
+                           f"anomaly/{tag}_checked_params": total})
+                # Optional alert (may be throttled)
+                try:
+                    wandb.alert(title=f"Non-finite grads ({tag})",
+                                text=f"{len(bad)} params non-finite; see logs")
+                except Exception:
+                    pass
+                wandb.summary[f"last_anomaly_{tag}"] = lines[0][:512]
+            # Force a crash to get a traceback in your logs
+            raise RuntimeError(msg)
+
+    except Exception:
+        tb = traceback.format_exc(limit=None)
+        if wandb.run:
+            wandb.log({f"anomaly/{tag}_trace": tb})
+        raise
+
 
 class BaseOptimizerWrapper:
     """Base optimizer wrapper with all possible optimization methods"""
@@ -94,6 +161,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         processed_data['norm_adv'] = self.ppo_params['normalize_advantages']
         processed_data['vf_coef'] = self.ppo_params['value_function_coef']
         processed_data['max_grad_norm'] = self.ppo_params['max_grad_norm']
+        processed_data['clip_by_component'] = self.ppo_params.get('clip_by_component', True)
 
         # PPO parameters with defaults
         processed_data['target_kl'] = self.ppo_params.get('target_kl', 0.015)
@@ -320,7 +388,7 @@ class HybridWrapper(BaseOptimizerWrapper):
                 last_approx_kl = approx_kl.item()
                 
                 # Check gradient information on first pass (note that losses are already multiplied by the coefficients)
-                if epoch == 0 and start == 0:
+                if epoch == 0 and start == 0 and False:
                     gradient_metrics = self._analyze_gradients(
                         policy_loss, 
                         value_loss, 
@@ -542,6 +610,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             pathwise_rewards_slice = processed_data['pathwise_rewards'][processed_data['effective_slice']]
             pathwise_loss = - pathwise_rewards_slice.mean()
             pathwise_loss = processed_data['pathwise_coef'] * pathwise_loss
+            # pathwise_loss = processed_data['pathwise_coef'] * pathwise_loss / torch.tensor(0.0, device=self.device)
         
         return policy_loss, value_loss, entropy_loss, pathwise_loss, metrics
 
@@ -608,11 +677,15 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Skip backward if no loss components are used
         grad_metrics = {}
         if loss.requires_grad:
+            torch.autograd.set_detect_anomaly(True)
             loss.backward()
+            # backward_with_anomaly(loss, tag="train")
             
-            # Apply gradient clipping if specified
-            if processed_data['max_grad_norm'] is not None:
+            # Apply gradient clipping and logging
+            if processed_data['clip_by_component']:
                 grad_metrics = self._clip_gradients_by_component(processed_data['max_grad_norm'])
+            else:
+                grad_metrics = self._clip_gradients_whole(processed_data['max_grad_norm'])
             
             # Perform optimizer step
             self.optimizer.step()
@@ -700,9 +773,9 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Track gradient norms for logging
         grad_metrics = {}
         
-        # Clip gradients separately for each group
+        # Process gradients for each group
         for group_name, params in param_groups.items():
-            if params:  # Only clip if group has parameters
+            if params:  # Only process if group has parameters
                 # Get parameters with non-None gradients
                 params_with_grad = [p for p in params if p.grad is not None]
                 
@@ -710,19 +783,55 @@ class HybridWrapper(BaseOptimizerWrapper):
                 if not params_with_grad:
                     continue
 
-                # Apply clipping and get the norm before clipping
-                grad_norm_before = torch.nn.utils.clip_grad_norm_(params_with_grad, max_grad_norm)
+                # Calculate norm before any clipping
+                grad_norm_before = torch.nn.utils.clip_grad_norm_(params_with_grad, float('inf'))
 
-                # Calculate norm after clipping
-                grad_norms_after = [torch.norm(p.grad.detach()) for p in params_with_grad]
-                grad_norm_after = torch.norm(torch.stack(grad_norms_after))
-
-
-                
-                # Store metrics
+                # Store "before" metrics (always log these)
                 grad_metrics[f'grad_norm/{group_name}/before'] = grad_norm_before.item()
-                grad_metrics[f'grad_norm/{group_name}/after'] = grad_norm_after.item()
-                grad_metrics[f'grad_norm/{group_name}/clip_ratio'] = grad_norm_after.item() / (grad_norm_before.item() + 1e-8)
+                
+                # Only apply clipping and calculate "after" metrics if max_grad_norm is not None
+                if max_grad_norm is not None:
+                    # Apply clipping and get the norm before clipping
+                    grad_norm_before_clip = torch.nn.utils.clip_grad_norm_(params_with_grad, max_grad_norm)
+
+                    # Calculate norm after clipping
+                    grad_norms_after = [torch.norm(p.grad.detach()) for p in params_with_grad]
+                    grad_norm_after = torch.norm(torch.stack(grad_norms_after))
+
+                    # Store "after" metrics
+                    grad_metrics[f'grad_norm/{group_name}/after'] = grad_norm_after.item()
+                    grad_metrics[f'grad_norm/{group_name}/clip_ratio'] = grad_norm_after.item() / (grad_norm_before_clip.item() + 1e-8)
+        
+        return grad_metrics
+
+    def _clip_gradients_whole(self, max_grad_norm):
+        """Clip gradients as a whole (all parameters together)."""
+        # Get all parameters with gradients
+        params_with_grad = [p for p in self.model.parameters() if p.grad is not None]
+        
+        if not params_with_grad:
+            return {}
+        
+        # Calculate norm before any clipping
+        grad_norm_before = torch.nn.utils.clip_grad_norm_(params_with_grad, float('inf'))
+        
+        # Store "before" metrics (always log these)
+        grad_metrics = {
+            'grad_norm/total/before': grad_norm_before.item()
+        }
+        
+        # Only apply clipping and calculate "after" metrics if max_grad_norm is not None
+        if max_grad_norm is not None:
+            # Apply clipping and get the norm before clipping
+            grad_norm_before_clip = torch.nn.utils.clip_grad_norm_(params_with_grad, max_grad_norm)
+
+            # Calculate norm after clipping
+            grad_norms_after = [torch.norm(p.grad.detach()) for p in params_with_grad]
+            grad_norm_after = torch.norm(torch.stack(grad_norms_after))
+            
+            # Store "after" metrics
+            grad_metrics['grad_norm/total/after'] = grad_norm_after.item()
+            grad_metrics['grad_norm/total/clip_ratio'] = grad_norm_after.item() / (grad_norm_before_clip.item() + 1e-8)
         
         return grad_metrics
 

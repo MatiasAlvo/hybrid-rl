@@ -34,6 +34,7 @@ optimizer_params:
   'gradient_clip': 1.0
   'ppo_params':
     'num_epochs': 1
+    'clip_by_component': true
 
 nn_params:
   policy_network:

@@ -4,6 +4,53 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 
+def _dump_stats(tag, t, k=5):
+    with torch.no_grad():
+        t_ = t.detach()
+        print(
+            f"[{tag}] shape={tuple(t_.shape)} "
+            f"min={t_.min().item():.3e} max={t_.max().item():.3e} "
+            f"mean={t_.mean().item():.3e} std={t_.std().item():.3e}"
+        )
+        flat = t_.flatten()
+        idxmax = torch.argmax(flat)
+        idxmin = torch.argmin(flat)
+        print(f"[{tag}] argmax={idxmax.item()}, sample_max={flat[idxmax].item():.3e}")
+        print(f"[{tag}] argmin={idxmin.item()}, sample_min={flat[idxmin].item():.3e}")
+
+def _grad_watch(name, t, *, max_abs=1e6, max_norm=1e6):
+    if t is None or not torch.is_tensor(t) or not t.requires_grad:
+        return t
+    t.retain_grad()
+    def _hook(g):
+        if g is None: return
+        if not torch.isfinite(g).all():
+            # dump forward stats that drive this node
+            print(f"[GRAD NON-FINITE] {name}")
+            _dump_stats("FW/"+name, t)
+            raise RuntimeError(f"[GRAD NON-FINITE] {name}")
+        g_absmax = g.detach().abs().max().item()
+        g_norm = g.detach().flatten().norm().item()
+        if g_absmax > max_abs or g_norm > max_norm:
+            print(f"[GRAD TOO LARGE] {name}: max|g|={g_absmax:.3e}, ||g||={g_norm:.3e}")
+            # dump forward-side context right here
+            _dump_stats("FW/"+name, t)
+            # if you can, also dump the *immediate* consumers’ inputs:
+            # these you pass in from call site; example below
+            raise RuntimeError(f"[GRAD TOO LARGE] {name}")
+    t.register_hook(_hook)
+    return t
+
+def fw_check(tag, x):
+    if torch.is_tensor(x):
+        if not torch.isfinite(x).all():
+            raise RuntimeError(f"[FORWARD NON-FINITE] {tag}")
+        # cheap summary
+        _dump_stats(tag, x)
+    return x
+
+
+
 @dataclass
 class FeatureRange:
     name: str
@@ -420,6 +467,29 @@ class RangeManager:
         
         return feature_actions
 
+    def compute_total_action_grad_watch(self, discrete_probs, continuous_values, non_negative=True):
+        """
+        Compute the total action as the sum of discrete probabilities multiplied by continuous values.
+        
+        Args:
+            discrete_probs: tensor of shape [batch_size, n_stores, n_discrete]
+            continuous_values: tensor of shape [batch_size, n_stores, n_continuous]
+        
+        Returns:
+            total_action: tensor of shape [batch_size, n_stores, n_total_actions]
+        """
+        # inside RangeManager.compute_total_action
+        dp = _grad_watch("rm/discrete_probs", discrete_probs, max_abs=1e6, max_norm=1e8)
+        cv = _grad_watch("rm/continuous_values", continuous_values, max_abs=1e6, max_norm=1e8)
+        prod = _grad_watch("rm/prod=dp*cv", dp * cv, max_abs=1e6, max_norm=1e8)
+        total_action = prod.sum(dim=-1)
+        total_action = _grad_watch("action/total_action", total_action, max_abs=1e8, max_norm=1e9)
+        
+        if non_negative:
+            total_action = torch.clamp(total_action, min=0)
+        
+        return total_action
+    
     def compute_total_action(self, discrete_probs, continuous_values, non_negative=True):
         """
         Compute the total action as the sum of discrete probabilities multiplied by continuous values.

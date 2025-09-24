@@ -10,7 +10,6 @@ metric:
 parameters:
   add_gumbel_noise:
     values:
-      - false
       - true
   anneal_lr:
     values:
@@ -18,43 +17,35 @@ parameters:
   buffer_periods:
     values:
       - 50
-  initial_temperature:
-    distribution: uniform
-    max: 1.0
-    min: 0.9
+      - 10
+  clip_by_component:
+    values:
+      - true
+      - false
   learning_rate:
     distribution: log_uniform_values
     max: 0.01
     min: 0.0001
+    # max: 0.0001
+    # min: 0.00001
   max_grad_norm:
     distribution: uniform
     max: 10
-    min: 5
-  min_temperature:
-    distribution: log_uniform_values
-    max: 0.2
-    min: 0.001
+    min: 1
   normalize_observations:
     values:
       - false
   policy_activation:
     values:
       - Tanh
-  pathwise_coef:
-    distribution: uniform
-    max: 10
-    min: 8
+      # - ELU
+      # - ReLU
   reward_scaling_pathwise:
     values:
       - true
-  temperature_decay:
-    values:
-      - 1
   use_straight_through:
     values:
       - true
-  normalize_advantages:
-    values: [True]
   use_wandb:
     values:
       - true

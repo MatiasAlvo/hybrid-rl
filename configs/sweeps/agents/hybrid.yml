@@ -18,6 +18,9 @@ parameters:
   buffer_periods:
     values:
       - 50
+  clip_by_component:
+    values:
+      - true
   clip_coef:
     distribution: uniform
     max: 0.2

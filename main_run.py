@@ -40,7 +40,7 @@ from src.algorithms.hybrid.optimizer_wrappers.hybrid_wrapper import HybridWrappe
 
 from src.utils.config import Config
 
-if False:
+if True:
     torch.autograd.set_detect_anomaly(True)  # This will help detect anomalies in backward passes
     print('Anomaly detection enabled')
 
@@ -126,6 +126,51 @@ def create_parameter_groups_with_lr(model, base_lr, lr_multipliers):
     print("=" * 40)
     
     return param_groups
+
+
+# ---- DEBUG HOOK: forward NaN/Inf tripwire ----
+def register_forward_nan_checks(model, *, name_prefix=""):
+    """
+    Registers forward hooks on all leaf modules. If any module's output
+    or input is non-finite, raises RuntimeError (fail-fast).
+    Returns a list of hook handles (remember to .remove() them).
+    """
+    import torch
+
+    handles = []
+
+    def _check_tensor(t, label, mod_name, mod_cls):
+        if isinstance(t, torch.Tensor):
+            if not torch.isfinite(t).all():
+                bad = (~torch.isfinite(t)).nonzero(as_tuple=False)
+                # show up to 5 offending indices for context
+                bad_list = bad[:5].tolist() if bad.numel() else []
+                msg = (f"[NONFINITE] {label} in {mod_cls} '{mod_name}' "
+                       f"shape={tuple(t.shape)} example_idx={bad_list}")
+                print(msg)
+                raise RuntimeError(msg)
+
+    def _hook(mod, inputs, output):
+        mod_name = getattr(mod, "_layer_name", mod.__class__.__name__)
+        mod_cls  = mod.__class__.__name__
+        # check outputs
+        if isinstance(output, (tuple, list)):
+            for i, o in enumerate(output):
+                _check_tensor(o, f"output[{i}]", mod_name, mod_cls)
+        else:
+            _check_tensor(output, "output", mod_name, mod_cls)
+        # also check inputs (helps catch zero-denoms *before* the next op)
+        for i, x in enumerate(inputs):
+            _check_tensor(x, f"input[{i}]", mod_name, mod_cls)
+
+    # attach to leaf modules only (modules without children)
+    for name, m in model.named_modules():
+        if len(list(m.children())) == 0:
+            m._layer_name = f"{name_prefix}{name}"
+            handles.append(m.register_forward_hook(_hook))
+    return handles
+# ---- /DEBUG HOOK ----
+
 
 def run_training(setting_config, hyperparams_config, mode='both'):
     """
@@ -274,9 +319,26 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     if agent_type in agent_mapping:
         model = agent_mapping[agent_type](agent_config, feature_registry, device=device)
         print(f"Created model with agent class: {type(model).__name__}")
+
+        
     else:
         print(f"Warning: Unknown agent type '{agent_type}', defaulting to HybridAgent")
         model = HybridAgent(agent_config, feature_registry, device=device)
+
+    # === DEBUG: forward NaN/Inf tripwires ===
+    fwd_nan_handles = []
+    try:
+        # Whole model (fastest way to get coverage)
+        fwd_nan_handles += register_forward_nan_checks(model, name_prefix="model.")
+        # If your model exposes submodules, you can be more granular too:
+        if hasattr(model, "policy"):
+            fwd_nan_handles += register_forward_nan_checks(model.policy, name_prefix="policy.")
+        # if hasattr(model, "value_net"):
+        #     fwd_nan_handles += register_forward_nan_checks(model.value_net, name_prefix="value.")
+        # if hasattr(model, "range_manager"):
+        #     fwd_nan_handles += register_forward_nan_checks(model.range_manager, name_prefix="range.")
+    except Exception as _e:
+        print(f"Failed to register forward NaN checks: {_e}")
 
     # Get learning rate multipliers from config, with sensible defaults
     lr_multipliers = optimizer_params.get('lr_multipliers', {
@@ -389,6 +451,15 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     # Always close logger if it exists
     if trainer.logger is not None:
         trainer.logger.close()
+    
+    
+    # Clean up forward hooks
+    for _h in locals().get("fwd_nan_handles", []):
+        try:
+            _h.remove()
+        except Exception:
+            pass
+
     
     return train_metrics, dev_metrics, test_metrics
 

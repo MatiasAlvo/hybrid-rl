@@ -448,7 +448,7 @@ class GumbelSoftmaxAgent(HybridAgent):
             'policy_gradient': False,  # No PPO needed
             'value': False,             # No value function
             'pathwise': True,          # Uses pathwise gradients
-            'entropy': False            # No entropy loss, as actions are deterministic
+            'entropy': True            # No entropy loss, as actions are deterministic
         }
     
     def forward(self, observation, train=True):
@@ -465,14 +465,14 @@ class GumbelSoftmaxAgent(HybridAgent):
             if train and self.add_gumbel_noise:
                 # Sample from Gumbel(0, 1)
                 uniform_samples = torch.rand_like(logits)
-                gumbel_samples = -torch.log(-torch.log(uniform_samples + 1e-10) + 1e-10)
+                gumbel_samples = -torch.log(-torch.log(uniform_samples + 1e-8) + 1e-8)
                 
                 # Add Gumbel noise to logits
                 noisy_logits = logits + gumbel_samples
             else:
                 # During inference or if noise is disabled, don't add noise
                 noisy_logits = logits
-            
+                
             # Apply temperature scaling
             raw_outputs['discrete'] = noisy_logits / self.temperature
         
@@ -492,6 +492,19 @@ class GumbelSoftmaxAgent(HybridAgent):
             'value': value,
             'raw_outputs': raw_outputs
         }
+
+    def get_log_probs_value_and_entropy(self, processed_observation, action_indices):
+        """
+        Get logits, value, and entropy for GumbelSoftmax agent.
+        Returns None, None, and entropy (only from discrete head).
+        """
+        # Get policy outputs
+        raw_outputs = self.policy(processed_observation, process_state=False)
+        
+        # Get entropy from discrete logits only
+        entropy = self.get_entropy(raw_outputs['discrete'])
+        
+        return None, None, entropy
 
 class FactoredGumbelSoftmaxAgent(GumbelSoftmaxAgent):
     """

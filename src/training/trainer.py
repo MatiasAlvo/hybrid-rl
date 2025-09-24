@@ -17,6 +17,18 @@ import wandb
 import io
 from PIL import Image
 
+def assert_backbone0_params_finite(model):
+    lin = model.policy.backbone[0]  # adjust if index differs
+    W, b = lin.weight, lin.bias
+    if (not torch.isfinite(W).all()) or (b is not None and not torch.isfinite(b).all()):
+        raise RuntimeError("[weights] policy.backbone.0 has non-finite params")
+
+    # Optional: catch “about to explode” magnitudes
+    Wmax = W.detach().abs().max()
+    bmax = b.detach().abs().max() if b is not None else 0.0
+    if Wmax > 1e3 or bmax > 1e5:  # tune thresholds
+        raise RuntimeError(f"[weights] suspicious magnitude: max|W|={float(Wmax):.3e}, max|b|={float(bmax):.3e}")
+
 
 class Trainer():
     """
@@ -126,11 +138,13 @@ class Trainer():
                     )
                     
                     # Generate and log inventory vs value plot for dev set with dev loss
-                    self.log_inventory_value_plot(
-                        dev_metrics['trajectory_data'], 
-                        epoch, 
-                        dev_loss=dev_metrics['loss/reported']
-                    )
+                    # if value loss is used, log the inventory vs value plot
+                    if model.required_losses['value']:
+                        self.log_inventory_value_plot(
+                            dev_metrics['trajectory_data'], 
+                            epoch, 
+                            dev_loss=dev_metrics['loss/reported']
+                        )
                 
                 self.logger.flush_metrics()
             
@@ -360,8 +374,11 @@ class Trainer():
             # Add internal data to observation
             observation_and_internal_data = self._prepare_observation_with_internal_data(observation, simulator)
 
+            # DEBUG: assert backbone0 params are finite
+
             # Sample action and get policy outputs
             model_output = model(observation_and_internal_data, train=train)
+            assert_backbone0_params_finite(model)
             action_dict = model_output.get('action_dict')
             raw_outputs = model_output.get('raw_outputs', {})
             value = model_output.get('value', None)

@@ -2,6 +2,9 @@ from src.envs.inventory.simulator import Simulator
 from src import torch
 from typing import Dict, Optional, Tuple
 from src.envs.inventory.range_manager import RangeManager
+from src.envs.inventory.range_manager import _grad_watch
+from src.envs.inventory.range_manager import fw_check
+
 
 class HybridSimulator(Simulator):
     """
@@ -69,15 +72,100 @@ class HybridSimulator(Simulator):
         
         # Then add additional costs from registered components
         additional_costs = self._calculate_additional_costs(self._internal_observation, action_dict)
+        
+        additional_costs = _grad_watch(
+                        "costs/additional_costs",
+                        additional_costs,
+                        max_abs=1e4,   # tune to your scale
+                        max_norm=1e6
+                    )
+
+        base_costs = _grad_watch("base_costs/summed", base_costs, max_abs=1e5, max_norm=1e7)
         total_costs = base_costs + additional_costs
+        total_costs = _grad_watch("costs/total_costs", total_costs, max_abs=1e5, max_norm=1e7)
+
 
         # Return normalized observation if needed
         if self.normalize_observations:
             next_observation = self._normalize_observation(next_observation)
 
         return next_observation, total_costs, False, {}, {}
-        
+    
     def _calculate_base_transitions_and_costs(self, observation, action_dict):
+        # 1) Demands etc. (these usually don’t require grad)
+        current_demands = self.get_current_demands(
+            self._internal_data,
+            observation['current_period'].item()
+        )
+
+        # 2) Inventories
+        inventory = observation['store_inventories']
+        inventory_on_hand = inventory[:, :, 0]
+        post_inventory_on_hand = inventory_on_hand - current_demands
+
+        # 3) Variable (underage/holding) costs
+        if self.maximize_profit:
+            sold = torch.minimum(inventory_on_hand, current_demands)
+            holding = torch.clip(post_inventory_on_hand, min=0)
+            base_costs = (-observation['underage_costs'] * sold +
+                        observation['holding_costs'] * holding)
+        else:
+            shortage = torch.clip(-post_inventory_on_hand, min=0)
+            holding  = torch.clip(post_inventory_on_hand, min=0)
+            base_costs = (observation['underage_costs'] * shortage +
+                        observation['holding_costs'] * holding)
+
+        # --- WATCH: these costs are typically constants w.r.t. action if obs is detached,
+        # but keep the hook if you allow differentiable dynamics through inventory later:
+        base_costs = _grad_watch("base_costs/uh+hold", base_costs, max_abs=1e8, max_norm=1e8)
+
+        # 4) Procurement costs path (high-leverage for explosions)
+        total_action = action_dict['feature_actions']['total_action']  # [B, stores]
+        # total_action = _grad_watch("action/total_action", total_action, max_abs=1e6, max_norm=1e8)
+
+        procurement_cost = observation['procurement_costs'] * total_action
+        procurement_cost = _grad_watch("costs/procurement_cost", procurement_cost, max_abs=1e6, max_norm=1e8)
+
+        base_costs = base_costs + procurement_cost
+        base_costs = _grad_watch("base_costs/with_procurement", base_costs, max_abs=1e6, max_norm=1e8)
+
+        # Sum across stores
+        base_costs = base_costs.sum(dim=1)
+        base_costs = _grad_watch("base_costs/summed", base_costs, max_abs=1e6, max_norm=1e8)
+
+        # base_costs = fw_check("base_costs/uh+hold", base_costs + 0)  # ensure we print its scale
+
+        # base_costs = fw_check("base_costs/with_procurement",
+        #                     base_costs + procurement_cost)
+
+        # base_costs = fw_check("base_costs/summed",
+        #                     base_costs.sum(dim=1))
+
+        # 5) Dynamics path (allocation influences future cost)
+        allocation = total_action
+        # allocation = _grad_watch("dynamics/allocation", allocation, max_abs=1e6, max_norm=1e8)
+
+        lead_time = int(observation['lead_times'][0, 0].item())
+        if observation['lead_times'].unique().numel() > 1:
+            raise ValueError('observation["lead_times"] contains more than one different value')
+
+        # Update inventories (this path creates gradients to future periods)
+        new_inventory = self._update_inventories_in_place(
+            inventory,                # likely no grad
+            post_inventory_on_hand,   # likely no grad
+            allocation,               # <-- grad flows here
+            lead_time
+        )
+        # Hook on the result to see incoming gradient from later computations:
+        observation['store_inventories'] = _grad_watch("dynamics/new_inventory", new_inventory, max_abs=1e8, max_norm=1e9)
+
+        # Advance time
+        self.observation['current_period'] += 1
+
+        return observation, base_costs
+
+
+    def _calculate_base_transitions_and_costs_backup(self, observation, action_dict):
         """Calculate basic transitions and costs with proper in-place updates"""
 
         # 1. Get current demands
@@ -286,7 +374,7 @@ class HybridSimulator(Simulator):
             allocation: Order amounts [batch_size, n_stores]
             lead_time: Lead time for orders
         """
-        return torch.stack(
+        out = torch.stack(
             [
                 inventory_on_hand + inventory[:, :, 1],  # Current + next period arrivals
                 *self.move_columns_left(inventory, 1, lead_time - 1),  # Move existing orders left
@@ -294,6 +382,7 @@ class HybridSimulator(Simulator):
             ], 
             dim=2
         )
+        return _grad_watch("dynamics/stack_out", out, max_abs=1e8, max_norm=1e9)
 
     def _compute_normalization_stats(self):
         """Compute mean and std using collected inventory observations"""
