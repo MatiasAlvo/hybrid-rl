@@ -859,7 +859,7 @@ class HybridPolicy(PolicyNetwork):
         # Get base features
         base_features = self.get_features(x).unsqueeze(1)
         # concatenate base_features with x
-        base_features = torch.cat([base_features[:, :, 2:]], dim=-1)
+        # base_features = torch.cat([base_features[:, :, 2:]], dim=-1)
         # base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
         
         # Create separate feature paths for each head

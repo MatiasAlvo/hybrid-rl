@@ -8,9 +8,6 @@ metric:
   goal: 'minimize'
 
 parameters:
-  add_gumbel_noise:
-    values:
-      - false
   anneal_lr:
     values:
       - true  # FIXED: Clear winner from analysis

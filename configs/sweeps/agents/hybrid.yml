@@ -17,7 +17,8 @@ parameters:
       - false
   buffer_periods:
     values:
-      - 50
+      - 30
+      - 10
   clip_coef:
     distribution: uniform
     max: 0.2
@@ -34,10 +35,6 @@ parameters:
     distribution: uniform
     max: 0.95
     min: 0.92
-  initial_temperature:
-    distribution: log_uniform_values
-    max: 10
-    min: 1
   learning_rate:
     distribution: log_uniform_values
     max: 0.005
@@ -45,14 +42,9 @@ parameters:
   max_grad_norm:
     distribution: uniform
     max: 10
-    min: 5
-  min_temperature:
-    distribution: log_uniform_values
-    max: 0.2
-    min: 0.001
+    min: 1
   normalize_advantages:
     values:
-      # - false
       - true
   normalize_observations:
     values:
@@ -60,6 +52,7 @@ parameters:
   num_epochs:
     values:
       - 5
+      - 3
   pathwise_coef:
     distribution: log_uniform_values
     max: 100
@@ -67,7 +60,7 @@ parameters:
   policy_activation:
     values:
       - Tanh
-      # - ELU
+      - ELU
   reward_scaling:
     values:
       - true
@@ -76,25 +69,20 @@ parameters:
       - true
   use_gae:
     values:
-      # - false
       - true
   value_activation:
     values: 
       - Tanh
-      # - ELU
   value_function_coef:
     distribution: log_uniform_values
     max: 0.2
     min: 0.1
-  # entropy_coef:
-  #   distribution: log_uniform_values
-  #   max: 1.0
-  #   min: 0.001
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
+      - 1.0
       - 5.0
   use_wandb:
     values:

@@ -112,12 +112,12 @@ params_by_dataset :
   'train': 
     'n_samples': 1024 
     'batch_size': 128  # Values tested: 1024, 8192
-    'periods': 150 
+    'periods': 100 
     'ignore_periods': 16 
   'dev': 
     'n_samples': 1024 
     'batch_size': 128 
-    'periods': 150 
+    'periods': 100 
     'ignore_periods': 16 
   'test': 
     'n_samples': 1024 

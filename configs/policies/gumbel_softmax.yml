@@ -1,6 +1,6 @@
 trainer_params:
   # 'epochs': 20
-  'epochs': 100
+  'epochs': 300
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -12,7 +12,7 @@ trainer_params:
   'compute_metrics_on_test': false
 
 logging_params: 
-  'use_wandb': false
+  'use_wandb': true
   'use_tensorboard': false
   'wandb_project_name': "inventory_control"
   'wandb_entity': "alvomatias"
@@ -26,10 +26,10 @@ agent_params:
   'min_temperature': 0.001
   'temperature_decay': 1.0
   'use_straight_through': true
-  'add_gumbel_noise': false
+  'add_gumbel_noise': true
 
 optimizer_params:
-  'learning_rate': 0.0015
+  'learning_rate': 0.0005
   'anneal_lr': true
   'weight_decay': 0.0
   'gradient_clip': 1.0
@@ -38,16 +38,17 @@ optimizer_params:
     'gamma': null
     'gae_lambda': null
     'normalize_advantages': null
+    'normalize_observations': false
     'use_gae': null
     'num_epochs': 1
     'value_function_coef': null
     'pathwise_coef': 1.0
     'reward_scaling_pathwise': true
     'reward_scaling': true
-    'buffer_periods': 10
+    'buffer_periods': 30
     # 'max_grad_norm': null
     'max_grad_norm': 1.0
-    'entropy_coef': 0.01
+    'entropy_coef': 0.0005
     'clip_by_component': true
 
 nn_params:
