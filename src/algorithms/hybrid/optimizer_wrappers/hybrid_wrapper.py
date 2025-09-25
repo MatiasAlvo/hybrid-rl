@@ -263,6 +263,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Initialize loss and policy metrics
         total_loss, total_v_loss, total_pg_loss = 0, 0, 0
         total_entropy_loss, total_pathwise_loss = 0, 0
+        total_raw_entropy = 0  # Track raw entropy (without coefficient)
         clipfracs, approx_kls = [], []
         first_clipfrac, first_approx_kl = None, None
         last_clipfrac, last_approx_kl = None, None
@@ -295,7 +296,7 @@ class HybridWrapper(BaseOptimizerWrapper):
                 mb_data = self._get_minibatch(tensors, mb_inds)
                 
                 # Compute losses ALREADY MULTIPLIED by the coefficients
-                policy_loss, value_loss, entropy_loss, pathwise_loss, metrics = self._compute_losses(
+                policy_loss, value_loss, entropy_loss, pathwise_loss, metrics, raw_entropy = self._compute_losses(
                     mb_data, 
                     processed_data, 
                     epoch
@@ -359,6 +360,11 @@ class HybridWrapper(BaseOptimizerWrapper):
                 total_pg_loss += policy_loss.item()
                 total_entropy_loss += entropy_loss.item()
                 total_pathwise_loss += pathwise_loss.item()
+                
+                # Track raw entropy if entropy is being computed
+                if self.required_losses['entropy'] and raw_entropy is not None:
+                    total_raw_entropy += raw_entropy.item()
+                
                 clipfracs.append(clipfrac)
                 approx_kls.append(approx_kl.item())
                 
@@ -420,6 +426,10 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Add temperature to metrics if it exists
         if hasattr(self.model, 'temperature'):
             metrics['gumbel/temperature'] = self.model.temperature
+        
+        # Add raw entropy metric if entropy is being computed
+        if self.required_losses['entropy']:
+            metrics['entropy/mean'] = total_raw_entropy / num_updates
         
         return metrics
 
@@ -533,8 +543,10 @@ class HybridWrapper(BaseOptimizerWrapper):
             self.optimizer.zero_grad()
         
         # Compute entropy loss if needed
+        raw_entropy = None
         if required_losses['entropy'] and entropy is not None:
-            entropy_loss = entropy.mean()
+            raw_entropy = entropy.mean()
+            entropy_loss = raw_entropy
             entropy_loss = processed_data['ent_coef'] * entropy_loss
         
         # Add pathwise loss component for continuous actions if needed
@@ -543,7 +555,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             pathwise_loss = - pathwise_rewards_slice.mean()
             pathwise_loss = processed_data['pathwise_coef'] * pathwise_loss
         
-        return policy_loss, value_loss, entropy_loss, pathwise_loss, metrics
+        return policy_loss, value_loss, entropy_loss, pathwise_loss, metrics, raw_entropy
 
     def _analyze_gradients(self, policy_loss, value_loss, entropy_loss, pathwise_loss, processed_data):
         """Analyze gradients from different loss components."""

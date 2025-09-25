@@ -853,11 +853,14 @@ class HybridPolicy(PolicyNetwork):
         if process_state:
             x = x['store_inventories']
             x = x.flatten(start_dim=1)
+            # # slightly jitter the input
+            # x = x + torch.randn_like(x)*0.01
 
         # Get base features
         base_features = self.get_features(x).unsqueeze(1)
         # concatenate base_features with x
-        base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
+        base_features = torch.cat([base_features[:, :, 2:]], dim=-1)
+        # base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
         
         # Create separate feature paths for each head
         outputs = {}

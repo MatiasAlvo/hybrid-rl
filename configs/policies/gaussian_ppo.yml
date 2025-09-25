@@ -36,6 +36,7 @@ optimizer_params:
     'use_gae': true
     'num_epochs': 5
     'value_function_coef': 0.1
+    'clip_by_component': true
 
 nn_params:
   policy_network:

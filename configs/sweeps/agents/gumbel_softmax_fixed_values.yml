@@ -22,19 +22,14 @@ parameters:
     values:
       - true
   learning_rate:
-    distribution: log_uniform_values
-    max: 0.01
-    min: 0.0001
-    # max: 0.0001
-    # min: 0.00001
+    values:
+      - 0.0005
   max_grad_norm:
-    distribution: uniform
-    max: 10
-    min: 1
+    values:
+      - 1
   entropy_coef:
-    distribution: log_uniform_values
-    max: 0.1
-    min: 0.0001
+    values:
+      - 0.0005
   normalize_observations:
     values:
       - false

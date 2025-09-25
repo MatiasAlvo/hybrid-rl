@@ -131,6 +131,13 @@ class Trainer():
                         epoch, 
                         dev_loss=dev_metrics['loss/reported']
                     )
+                    
+                    # Generate and log inventory vs discrete action 0 probability plot for dev set with dev loss
+                    self.log_inventory_discrete_action0_prob_plot(
+                        dev_metrics['trajectory_data'], 
+                        epoch, 
+                        dev_loss=dev_metrics['loss/reported']
+                    )
                 
                 self.logger.flush_metrics()
             
@@ -389,7 +396,7 @@ class Trainer():
 
             # Collect trajectory data if requested
             if collect_trajectories:
-                self._collect_trajectory_data(trajectory_data, vectorized_obs, action_dict, value, reward, terminated)
+                self._collect_trajectory_data(trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs)
 
             # Update running rewards
             batch_reward += total_reward
@@ -427,6 +434,7 @@ class Trainer():
             'observations': [],      # observations at each time step
             'rewards': [],           # rewards at each time step
             'discrete_action_indices': [],  # one action per sub-range
+            'discrete_logits': [],    # discrete action probabilities
             'total_action': [],      # total one-dimensional action
             'log_probs': [],            # log_probs for the selected sub-range
             'values': [],            # value of the state
@@ -467,7 +475,7 @@ class Trainer():
         """Apply discrete allocation by rounding action values"""
         return {key: val.round() for key, val in action_dict.items()}
 
-    def _collect_trajectory_data(self, trajectory_data, vectorized_obs, action_dict, value, reward, terminated):
+    def _collect_trajectory_data(self, trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs=None):
         """Collect trajectory data for the current step"""
         if vectorized_obs is not None:
             trajectory_data['observations'].append(vectorized_obs.clone())
@@ -475,6 +483,10 @@ class Trainer():
         # Only append fields that exist and are not None
         if 'discrete_action_indices' in action_dict and action_dict['discrete_action_indices'] is not None:
             trajectory_data['discrete_action_indices'].append(action_dict['discrete_action_indices'].detach().clone())
+        
+        # Collect discrete logits if available in raw_outputs
+        if raw_outputs is not None and 'discrete' in raw_outputs and raw_outputs['discrete'] is not None:
+            trajectory_data['discrete_logits'].append(raw_outputs['discrete'].detach().clone())
         
         if 'feature_actions' in action_dict and 'total_action' in action_dict['feature_actions']:
             trajectory_data['total_action'].append(action_dict['feature_actions']['total_action'].detach().clone())
@@ -1017,4 +1029,92 @@ class Trainer():
             
         except Exception as e:
             print(f"Error generating inventory-value plot: {e}")
+
+    def log_inventory_discrete_action0_prob_plot(self, trajectory_data, epoch, dev_loss=None):
+        """
+        Generate and log a plot showing the relationship between inventory and probability of discrete action 0 to wandb.
+        
+        Args:
+            trajectory_data: Dictionary containing trajectory information
+            epoch: Current epoch number
+            dev_loss: Optional dev loss to include in the title
+        """
+        try:
+            # Skip if logger is not available
+            if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
+                return
+            
+            # Check if we have the necessary data
+            if ("observations" not in trajectory_data or 
+                "discrete_logits" not in trajectory_data or
+                trajectory_data["discrete_logits"] is None or
+                trajectory_data["observations"] is None):
+                print("Missing required data for inventory-discrete action 0 probability plot")
+                return
+            
+            # Get shapes: [T, B, F] for observations, [T, B, n_actions] for discrete_logits
+            T, B, _ = trajectory_data["observations"].shape
+            
+            # Limit the number of samples to plot
+            n_samples = min(30, B)
+            
+            # Select random batch indices first
+            random_batch_indices = torch.randperm(B)[:n_samples]
+            
+            # Select the samples for each tensor
+            selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
+            selected_discrete_logits = trajectory_data["discrete_logits"][:, random_batch_indices, :]  # Shape: [T, n_samples, n_actions]
+            
+            # Flatten time and batch dimensions for plotting
+            # Reshape to [T*n_samples, F] and [T*n_samples, n_actions]
+            inventories_flat = selected_inventories.reshape(-1, selected_inventories.shape[-1]).detach().cpu()
+            discrete_logits_flat = selected_discrete_logits.reshape(-1, selected_discrete_logits.shape[-1]).detach().cpu()
+            
+            # Calculate inventory sums (sum across feature dimension)
+            inventory_sum = inventories_flat.sum(dim=1).numpy()
+            
+            # Compute probabilities from logits using softmax
+            discrete_probs = torch.softmax(discrete_logits_flat, dim=-1)
+            
+            # Extract probability of discrete action 0 (first action)
+            action0_probs = discrete_probs[:, 0].numpy()  # Shape: [T*n_samples]
+            
+            # Create the plot with larger figure size
+            plt.figure(figsize=(16, 10))
+            
+            # Create scatter plot
+            plt.scatter(inventory_sum, action0_probs, alpha=0.7, s=50, color='blue')
+            
+            # Add dev loss to title if provided
+            title = f'Inventory vs Probability of Discrete Action 0 (Epoch {epoch})'
+            if dev_loss is not None:
+                title += f' - Dev Loss: {dev_loss:.4f}'
+            
+            # Use larger font sizes for better readability
+            plt.title(title, fontsize=18)
+            plt.xlabel('Total Inventory', fontsize=16)
+            plt.ylabel('Probability of Discrete Action 0', fontsize=16)
+            plt.xticks(fontsize=14)
+            plt.yticks(fontsize=14)
+            
+            # Set y-axis limits to [0, 1] since it's a probability
+            plt.ylim(0, 1)
+            
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            
+            # Convert plot to image with higher DPI for better quality
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            img = Image.open(buf)
+            
+            # Log to wandb directly through current_metrics
+            self.logger.current_metrics['inventory_discrete_action0_prob_plot'] = wandb.Image(img)
+            
+            # Close the plot to free memory
+            plt.close()
+            
+        except Exception as e:
+            print(f"Error generating inventory-discrete action 0 probability plot: {e}")
 
