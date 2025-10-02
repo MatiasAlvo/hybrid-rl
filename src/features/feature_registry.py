@@ -153,7 +153,7 @@ class FeatureRegistry:
         
         return action_dict
     
-    def process_network_output(self, raw_outputs, argmax=False, sample=False, random_continuous=False, straight_through=False, discrete_probs=None, log_probs=None):
+    def process_network_output(self, raw_outputs, argmax=False, sample=False, random_continuous=False, straight_through=False, discrete_probs=None, log_probs=None, observations=None):
         """
         Process network outputs into action space - works for all agent types
         
@@ -216,7 +216,8 @@ class FeatureRegistry:
             continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
             continuous_values = self.range_manager.scale_continuous_by_ranges(
                 continuous_values,
-                self.range_manager.get_continuous_ranges()
+                self.range_manager.get_continuous_ranges(),
+                observations=observations
             )
         
         # Combine discrete and continuous actions into feature-specific actions
@@ -254,7 +255,7 @@ class FeatureRegistry:
         return action_dict
     
     def process_continuous_output(self, raw_continuous, discrete_action_indices=None, continuous_mean=None, 
-                                 continuous_log_std=None, random_continuous=False):
+                                 continuous_log_std=None, random_continuous=False, observations=None):
         """
         Process network outputs for continuous actions.
         
@@ -303,7 +304,8 @@ class FeatureRegistry:
         continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
         continuous_values = self.range_manager.scale_continuous_by_ranges(
             continuous_values,
-            self.range_manager.get_continuous_ranges()
+            self.range_manager.get_continuous_ranges(),
+            observations=observations
         )
         
         # Create result dictionary

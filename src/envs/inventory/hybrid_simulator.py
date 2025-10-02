@@ -86,6 +86,11 @@ class HybridSimulator(Simulator):
             observation['current_period'].item()
         )
 
+        # Update observation corresponding to past occurrences (e.g., arrivals, orders, demands).
+        # Do this before updating current period (as we consider current period + 1)
+        # Pass the observation parameter so it gets updated directly
+        self.update_past_data(action_dict, observation)
+
         # Update time related features (e.g., days to christmas)
         self.update_time_features(
             self._internal_data, 

@@ -44,9 +44,8 @@ problem_params:
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
-      'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
-      # 'values': [0.0, 30.0]
-      'values': [0.0, 64.0]
+      'thresholds': [-0.0001, 0.0, 20.0, 40.0, 62.0]  # first and last values are the same across all discrete features
+      'values': [0.0, 30.0, 50.0, 64.0]
 
 observation_params:
   'include_warehouse_inventory': False
@@ -123,5 +122,5 @@ params_by_dataset :
   'test': 
     'n_samples': 1024 
     'batch_size': 128 
-    'periods': 100
+    'periods': 150
     'ignore_periods': 16

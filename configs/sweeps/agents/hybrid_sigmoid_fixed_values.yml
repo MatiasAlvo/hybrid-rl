@@ -10,34 +10,25 @@ metric:
 parameters:
   anneal_lr:
     values:
-      - true  # FIXED: Clear winner from analysis
+      - false  # FIXED: Clear winner from analysis
   buffer_periods:
     values:
-      - 50
+      - 20
   clip_coef:
     values:
-      - 0.16  # FIXED: Median of top performers
-  fixed_cost:
-    values:
-      - 64
+      - 0.15  # FIXED: Median of top performers
   gae_lambda:
     values:
       - 0.96  # FIXED: Standard value that worked well
   gamma:
     values:
-      - 0.94  # FIXED: Middle of successful range
-  initial_temperature:
-    values:
-      - 5.0  # FIXED: Middle of successful range
+      - 0.93  # FIXED: Middle of successful range
   learning_rate:
     values:
-      - 0.002  # FIXED: Higher end that worked better
+      - 0.001  # FIXED: Higher end that worked better
   max_grad_norm:
     values:
-      - 6.0  # FIXED: Conservative clipping value
-  min_temperature:
-    values:
-      - 0.05  # FIXED: Low but not extreme
+      - 5.0  # FIXED: Conservative clipping value
   normalize_advantages:
     values:
       - true
@@ -49,7 +40,7 @@ parameters:
       - 5
   pathwise_coef:
     values:
-      - 12.0  # FIXED: Lower-middle of good range
+      - 1.0  # FIXED: Lower-middle of good range
   policy_activation:
     values:
       - Tanh
@@ -67,16 +58,16 @@ parameters:
       - Tanh
   value_function_coef:
     values:
-      - 0.12  # FIXED: Standard value that worked
+      - 0.14  # FIXED: Standard value that worked
   entropy_coef:
     values:
-      - 0.007  # FIXED: Lower entropy worked better
+      - 0.001  # FIXED: Lower entropy worked better
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
-      - 5.0
+      - 0.0
   use_wandb:
     values:
       - true

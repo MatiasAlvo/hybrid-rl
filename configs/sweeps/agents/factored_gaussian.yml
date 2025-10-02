@@ -14,7 +14,8 @@ parameters:
       - false
   buffer_periods:
     values:
-      - 50
+      - 10
+      - 30
   clip_coef:
     distribution: uniform
     max: 0.2
@@ -29,12 +30,12 @@ parameters:
     min: 0.92
   learning_rate:
     distribution: log_uniform_values
-    max: 1e-03
-    min: 1e-04
+    max: 0.01
+    min: 0.0001
   max_grad_norm:
     distribution: uniform
     max: 10
-    min: 5
+    min: 1
   normalize_advantages:
     values:
       - true
@@ -44,9 +45,15 @@ parameters:
   num_epochs:
     values:
       - 5
+      - 3
+  pathwise_coef:
+    distribution: uniform
+    max: 10
+    min: 0.1
   policy_activation:
     values:
       - Tanh
+      - ELU
   reward_scaling:
     values:
       - true
@@ -59,4 +66,11 @@ parameters:
   value_function_coef:
     distribution: log_uniform_values
     max: 0.2
-    min: 0.1 
+    min: 0.1
+  use_wandb:
+    values:
+      - true
+  continuous_shift:
+    values:
+      - 1.0
+      - 5.0

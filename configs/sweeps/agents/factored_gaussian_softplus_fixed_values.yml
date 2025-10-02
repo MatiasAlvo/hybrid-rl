@@ -1,0 +1,61 @@
+# Factored Gaussian PPO Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/factored_gaussian_ppo.yml'
+
+method: 'random'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  anneal_lr:
+    values:
+      - false  # Fixed: 100% of top performers used false
+  buffer_periods:
+    values:
+      - 20  
+  clip_coef:
+    values:
+      - 0.15  # Fixed: median of top 20%
+  gae_lambda:
+    values:
+      - 0.96  # Fixed: median of top 20%
+  gamma:
+    values:
+      - 0.93  # Fixed: median of top 20%
+  learning_rate:
+    values:
+      - 0.001  # Fixed: median of top 20%
+  max_grad_norm:
+    values:
+      - 5.0  # Fixed: median of top 20%
+  normalize_advantages:
+    values:
+      - true
+  normalize_observations:
+    values:
+      - false
+  num_epochs:
+    values:
+      - 3  # Fixed: top 10% preferred 5 (57%)
+  policy_activation:
+    values:
+      - ELU  # Fixed: 71% of top 10% used Tanh
+  reward_scaling:
+    values:
+      - true
+  use_gae:
+    values:
+      - true
+  value_activation:
+    values:
+      - Tanh
+  value_function_coef:
+    values:
+      - 0.15  # Fixed: median of top 20%
+  use_wandb:
+    values:
+      - true
+  continuous_shift:
+    values: 
+      - 5.0

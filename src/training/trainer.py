@@ -65,8 +65,10 @@ class Trainer():
             # Update learning rate if annealing is enabled
             if anneal_lr:
                 frac = 1.0 - (epoch / epochs)
-                new_lr = frac * initial_lr
                 for param_group in optimizer_wrapper.optimizer.param_groups:
+                    old_lr = param_group['lr']
+                    new_lr = frac * old_lr
+                    # print(f"Group '{param_group.get('name', 'unnamed')}': old_lr={old_lr:.6f}, frac={frac:.3f}, new_lr={new_lr:.6f}")
                     param_group['lr'] = new_lr
                 
                 # Log LR if logger exists
@@ -362,7 +364,7 @@ class Trainer():
         
         for t in range(periods):
             # Store observation if collecting trajectories
-            vectorized_obs = self.vectorize_observation(observation, observation_keys)
+            vectorized_obs = self.vectorize_observation(observation, observation_keys, model)
 
             # Add internal data to observation
             observation_and_internal_data = self._prepare_observation_with_internal_data(observation, simulator)
@@ -421,9 +423,30 @@ class Trainer():
 
     def _get_observation_keys(self, model):
         """Extract observation keys from model if available"""
-        if hasattr(model, 'value_net') and model.value_net is not None:
-            return model.value_net.observation_keys
+        if hasattr(model, 'policy') and model.policy is not None:
+            return model.policy.observation_keys
         return None
+    
+    def _validate_observation_keys_consistency(self, model):
+        """Validate that policy and value networks use the same observation_keys"""
+        # Get policy observation keys
+        policy_keys = None
+        if hasattr(model, 'policy') and hasattr(model.policy, 'observation_keys'):
+            policy_keys = model.policy.observation_keys
+        
+        # Get value network observation keys
+        value_keys = None
+        if hasattr(model, 'value_net') and model.value_net is not None and hasattr(model.value_net, 'observation_keys'):
+            value_keys = model.value_net.observation_keys
+        
+        # Only validate if both networks exist and have observation_keys
+        if policy_keys is not None and value_keys is not None:
+            if policy_keys != value_keys:
+                raise NotImplementedError(
+                    f"Policy and value networks have different observation_keys. "
+                    f"Policy: {policy_keys}, Value: {value_keys}. "
+                    f"Logic for different observation_keys is not yet supported."
+                )
 
     def _initialize_trajectory_data(self, collect_trajectories):
         """Initialize trajectory data structure if needed"""
@@ -642,7 +665,7 @@ class Trainer():
         ct = datetime.datetime.now()
         return f"{ct.year}_{ct.month:02d}_{ct.day:02d}"
 
-    def vectorize_observation(self, observation, observation_keys=None):
+    def vectorize_observation(self, observation, observation_keys=None, model=None):
         """
         Convert an observation dictionary into a flat vector based on specified keys.
         
@@ -652,7 +675,14 @@ class Trainer():
             The observation dictionary to vectorize
         observation_keys: list, optional
             List of keys from observation to include in vectorization
+        model: object, optional
+            The model object to validate observation_keys consistency
         """
+        # Validate observation_keys consistency between policy and value networks
+        if not hasattr(self, '_observation_keys_validated') and model is not None:
+            self._validate_observation_keys_consistency(model)
+            self._observation_keys_validated = True
+        
         if observation_keys is None:
             # Default behavior - only track store inventories
             return observation['store_inventories'].reshape(observation['store_inventories'].shape[0], -1).clone()  # Use clone to ensure the return is frozen

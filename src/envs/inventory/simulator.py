@@ -438,27 +438,30 @@ class Simulator(gym.Env):
         
         return days_to_christmas
 
-    def update_past_data(self, action):
+    def update_past_data(self, action, observation=None):
         """
         Update the past data observations (e.g. last demands, arrivals and orders) in the observation
+        If observation is provided, update that instead of self.observation
         """
+        # Use provided observation or default to self.observation
+        target_observation = observation if observation is not None else self.observation
 
-        if self._internal_data['demands'].shape[2] + 2 < self.observation['current_period'].item():
+        if self._internal_data['demands'].shape[2] + 2 < target_observation['current_period'].item():
             raise ValueError('Current period is greater than the number of periods in the data')
         if self.observation_params['demand']['past_periods'] > 0:
-            self.observation['past_demands'] = self.update_past_demands(
+            target_observation['past_demands'] = self.update_past_demands(
                 self._internal_data,
                 self.observation_params,
                 self.batch_size,
                 self.n_stores,
-                current_period=min(self.observation['current_period'].item() + 1, self._internal_data['demands'].shape[2])  # do this before updating current period!
+                current_period=min(target_observation['current_period'].item() + 1, self._internal_data['demands'].shape[2])  # do this before updating current period!
                 )
         
         if self.observation_params['include_past_observations']['arrivals'] > 0:
-            self.observation['arrivals'] = self.move_left_and_append(self.observation['arrivals'], self.observation['store_inventories'][:, :, 1])
+            target_observation['arrivals'] = self.move_left_and_append(target_observation['arrivals'], target_observation['store_inventories'][:, :, 1])
         
         if self.observation_params['include_past_observations']['orders'] > 0:
-            self.observation['orders'] = self.move_left_and_append(self.observation['orders'], action['stores'])
+            target_observation['orders'] = self.move_left_and_append(target_observation['orders'], action['stores'])
 
     def move_columns_left(self, tensor_to_displace, start_index, end_index):
         """

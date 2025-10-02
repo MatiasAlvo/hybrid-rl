@@ -599,11 +599,14 @@ class PolicyNetwork(nn.Module):
         self.activation = policy_config['activation']
         self.dropout_rate = policy_config.get('dropout', 0.0)
         self.use_batch_norm = policy_config.get('batch_norm', False)
-        self.continuous_scale = torch.tensor(policy_config['continuous_scale'], device=device)
-        self.continuous_shift = torch.tensor(policy_config['continuous_shift'], device=device)
+        self.continuous_scale = torch.tensor(policy_config['continuous_scale'], device=device) if policy_config['continuous_scale'] is not None else None
+        self.continuous_shift = torch.tensor(policy_config['continuous_shift'], device=device) if policy_config['continuous_shift'] is not None else None
         # self.continuous_shift = torch.tensor(policy_config.get('continuous_shift', 0.0), device=device)
         # self.continuous_scale_factor = torch.tensor(policy_config.get('continuous_scale_factor', 1.0), device=device)
         # self.continuous_shift_factor = torch.tensor(policy_config.get('continuous_shift_factor', 1.0), device=device)
+        
+        # Observation keys for input processing
+        self.observation_keys = policy_config.get('observation_keys', ['store_inventories'])
         
         # Build backbone
         if use_backbone:
@@ -673,6 +676,23 @@ class PolicyNetwork(nn.Module):
         """Get features from backbone network"""
         x = x.to(self.device)
         return self.backbone(x)
+    
+    def flatten_inputs(self, x):
+        """
+        Flatten observation inputs following the same logic as the value network.
+        This method processes observation dictionaries and concatenates features based on observation_keys.
+        """
+        if isinstance(x, dict):
+            # x is a dictionary of features, so concatenate on observation keys
+            features = torch.cat([x[key].flatten(start_dim=1) for key in self.observation_keys if key != 'current_period'], dim=-1)
+            if 'current_period' in self.observation_keys:
+                # Use the current_period value for all rows, so expand it to match the batch size
+                current_period_value = x['current_period'].unsqueeze(0).expand(features.size(0), -1).to(self.device)
+                features = torch.cat([current_period_value, features], dim=-1)
+            return features
+        else:
+            # x is already a tensor, just flatten it
+            return x.flatten(start_dim=1)
 
 class FactoredPolicy(PolicyNetwork):
     """Policy network that factors discrete and continuous outputs with separate networks"""
@@ -791,8 +811,7 @@ class FactoredPolicy(PolicyNetwork):
         Use get_discrete_output and get_continuous_output instead
         """
         if process_state:
-            x = x['store_inventories']
-            x = x.flatten(start_dim=1)
+            x = self.flatten_inputs(x)
         
         # Get discrete output
         discrete_logits = self.get_discrete_output(x)
@@ -851,16 +870,26 @@ class HybridPolicy(PolicyNetwork):
         
     def forward(self, x, process_state=True):
         if process_state:
-            x = x['store_inventories']
-            x = x.flatten(start_dim=1)
+            x = self.flatten_inputs(x)
             # # slightly jitter the input
             # x = x + torch.randn_like(x)*0.01
 
         # Get base features
         base_features = self.get_features(x).unsqueeze(1)
+
+        # # make a skip connection. consider that the last dimension of base_features is different to that of x
+        # # pad x with zeros so it has same dim as base_features and then sum along the last dimension
+        # x = torch.cat([x, torch.zeros(x.size(0), base_features.size(-1) - x.size(-1), device=x.device)], dim=-1)
+        # print(f'x: {x.shape}')
+        # print(f'base_features: {base_features.shape}')
+        # assert False
+        # base_features = base_features + x
+        
         # concatenate base_features with x
         # base_features = torch.cat([base_features[:, :, 2:]], dim=-1)
+        # base_features = torch.cat([base_features[:, :, x.size(-1):], x.unsqueeze(1)], dim=-1)
         # base_features = torch.cat([base_features[:, :, 2:], x.unsqueeze(1)], dim=-1)
+        # base_features = torch.cat([base_features, x.unsqueeze(1)], dim=-1)
         
         # Create separate feature paths for each head
         outputs = {}
@@ -897,9 +926,7 @@ class HybridPolicy(PolicyNetwork):
     def forward_backup(self, x, process_state=True):
         # If process_state is True, then we process the state to get the features 
         if process_state:
-            x = x['store_inventories']
-            # Flatten input, except for the batch dimension
-            x = x.flatten(start_dim=1)
+            x = self.flatten_inputs(x)
 
         # Get features and add store dimension
         features = self.get_features(x)
@@ -984,8 +1011,7 @@ class SeparateNetworkPolicy(PolicyNetwork):
     
     def forward(self, x, process_state=True):
         if process_state:
-            x = x['store_inventories']
-            x = x.flatten(start_dim=1)
+            x = self.flatten_inputs(x)
         
         outputs = {}
         
@@ -1013,9 +1039,7 @@ class HybridPolicySS(HybridPolicy):
         # Process state if needed
         if process_state:
             inventory_sum = x['store_inventories'].sum(dim=2)
-            x = x['store_inventories']
-            # Flatten input, except for the batch dimension
-            x = x.flatten(start_dim=1)
+            x = self.flatten_inputs(x)
 
         # Get features and add store dimension
         features = self.get_features(x)

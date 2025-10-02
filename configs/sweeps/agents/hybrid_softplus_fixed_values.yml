@@ -8,41 +8,31 @@ metric:
   goal: 'minimize'
 
 parameters:
-  add_gumbel_noise:
-    values:
-      - false
   anneal_lr:
     values:
-      - true
-      - false
+      - false  # Fixed: 60% of top performers used false
   buffer_periods:
     values:
-      - 20
-      - 10
+      - 20  # Fixed: median of top performers
   clip_coef:
-    distribution: uniform
-    max: 0.2
-    min: 0.1
+    values:
+      - 0.16  # Fixed: median of top performers
   fixed_cost:
     distribution: categorical
     values:
       - 64
   gae_lambda:
-    distribution: uniform
-    max: 0.97
-    min: 0.95
+    values:
+      - 0.96  # Fixed: median of top performers
   gamma:
-    distribution: uniform
-    max: 0.95
-    min: 0.92
+    values:
+      - 0.93  # Fixed: median of top performers
   learning_rate:
-    distribution: log_uniform_values
-    max: 0.01
-    min: 0.0001
+    values:
+      - 0.003  # Fixed: median of top performers
   max_grad_norm:
-    distribution: uniform
-    max: 10
-    min: 1
+    values:
+      - 5.0  # Fixed: median of top performers
   normalize_advantages:
     values:
       - true
@@ -51,16 +41,13 @@ parameters:
       - false
   num_epochs:
     values:
-      - 5
-      - 3
+      - 5  # Fixed: median of top performers
   pathwise_coef:
-    distribution: log_uniform_values
-    max: 100
-    min: 0.1
+    values:
+      - 10.0  # Fixed: median of top performers
   policy_activation:
     values:
-      - Tanh
-      - ELU
+      - Tanh  # Fixed: 90% of top performers used Tanh
   reward_scaling:
     values:
       - true
@@ -74,16 +61,14 @@ parameters:
     values: 
       - Tanh
   value_function_coef:
-    distribution: log_uniform_values
-    max: 0.2
-    min: 0.1
+    values:
+      - 0.13  # Fixed: median of top performers
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
-      - 1.0
-      - 5.0
+      - 5.0  # Fixed: median of top performers (changed from 1.0 to 1)
   use_wandb:
     values:
-      - true 
+      - true

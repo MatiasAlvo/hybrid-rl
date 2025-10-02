@@ -1,5 +1,5 @@
 trainer_params:
-  'epochs': 300
+  'epochs': 250
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -29,7 +29,7 @@ agent_params:
 
 optimizer_params:
   'learning_rate': 0.01
-  'anneal_lr': false
+  'anneal_lr': true
   'weight_decay': 0.0
   'gradient_clip': 1.0
   'lr_multipliers':
@@ -67,8 +67,10 @@ nn_params:
     batch_norm: false
     continuous_scale: 1.0
     # continuous_shift: 0.0
-    continuous_shift: 1.0
+    continuous_shift: 0.0
     # continuous_scale: 100.0
+    observation_keys: ['store_inventories']
+    scale_by_mean_demand: false  # NEW PARAMETER
     heads:
       discrete:
         enabled: true

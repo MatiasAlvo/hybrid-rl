@@ -129,8 +129,19 @@ class Scenario():
         # Changing demand seed for consistency with results prensented in the manuscript
         self.adjust_seeds_for_consistency(problem_params, store_params, seeds)
 
+        # Calculate total periods needed: periods + period_shift to avoid demands starting at 0
+        period_shift = self.observation_params.get('demand', {}).get('period_shift', 0)
+        total_periods_needed = self.periods + period_shift
+        
+        # Temporarily store original periods and update for demand generation
+        original_periods = self.periods
+        self.periods = total_periods_needed
+
         # Sample demand traces
         demand = demand_generator_functions[demand_params['distribution']](problem_params, demand_params, seeds['demand'])
+
+        # Restore original periods
+        self.periods = original_periods
 
         if demand_params['clip']:  # Truncate at 0 from below if specified
             demand = np.clip(demand, 0, None)

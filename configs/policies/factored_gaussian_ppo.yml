@@ -1,5 +1,5 @@
 trainer_params:
-  'epochs': 150
+  'epochs': 250
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -11,13 +11,13 @@ trainer_params:
   'compute_metrics_on_test': false
 
 logging_params: 
-  'use_wandb': true
+  'use_wandb': false
   'use_tensorboard': false
   'wandb_project_name': "inventory_control"
   'wandb_entity': "alvomatias"
   'exp_name': "factored_gaussian_ppo"
   'env_name': "inventory"
-  'setting_name': "lost_demand"
+  'setting_name': "one_store_fixed_costs"
 
 agent_params:
   'agent_type': 'factored_gaussian_ppo'
@@ -32,10 +32,17 @@ optimizer_params:
     'gamma': 0.95
     'gae_lambda': 0.95
     'normalize_advantages': true
+    'normalize_observations': false
+    'pathwise_coef': 1.0
+    'reward_scaling': true
+    'reward_scaling_pathwise': true
+    'clip_value_loss': false
+    'entropy_coef': 0.01
     'use_gae': true
-    'num_epochs': 5
+    'num_epochs': 1
     'value_function_coef': 0.1
     'clip_by_component': true
+    'max_grad_norm': 5.0
 
 nn_params:
   policy_network:
@@ -45,6 +52,11 @@ nn_params:
     activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
+    continuous_scale: 1.0
+    continuous_shift: 1.0 # recall this has to be positive when using softplus
+    observation_keys: [
+      'store_inventories'
+    ]
     heads:
       discrete:
         enabled: true

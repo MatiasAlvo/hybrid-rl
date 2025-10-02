@@ -125,6 +125,8 @@ def train_sweep(sweep_config):
                 'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
                 # Add mapping for continuous scale parameter - updated path
                 'continuous_scale': ('hyperparams', ['nn_params', 'policy_network', 'continuous_scale']),
+                'continuous_shift': ('hyperparams', ['nn_params', 'policy_network', 'continuous_shift']),
+                'discrete_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'discrete']),
                 'use_wandb': ('hyperparams', ['logging_params', 'use_wandb']),
                 # Add mapping for threshold parameter
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),

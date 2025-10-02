@@ -18,9 +18,8 @@ test_seeds :  # seeds for test set
   'demand': 65
   'initial_inventory': 4847
 
-# Add wandb tracking configuration
 wandb_config:
-  group: "fixed_cost_64"  # This will be the group name in wandb
+  group: "lost_demand"  # This will be the group name in wandb
   # You can add additional tracking parameters here as needed
   track_params:
     - ["problem_params.discrete_features.fixed_ordering_cost.values.1", "fixed_cost"]
@@ -35,18 +34,20 @@ sample_data_params:
   'test_periods': null
 
 problem_params: 
-  'setting_name': "one_store_fixed_costs"
+  'setting_name': "lost_demand"
   'n_stores': 1
   'n_warehouses': 0
   'n_extra_echelons': 0
-  'lost_demand': false
+  'lost_demand': true
   'maximize_profit': false
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
-      'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
-      # 'values': [0.0, 30.0]
-      'values': [0.0, 64.0]
+      'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
+      # 'thresholds': [-0.01, 0.0, 100.0]  # first and last values are the same across all discrete features
+      # 'thresholds': [-0.0001, 0.0, 62.0]  # first and last values are the same across all discrete features
+      'values': [0.0, 0.0]
+      # 'values': [0.0, 64.0]
 
 observation_params:
   'include_warehouse_inventory': False
@@ -73,7 +74,7 @@ observation_params:
 store_params: 
   'demand': 
     'distribution': 'poisson'
-    'mean': 10.0
+    'mean': 5.0
     'sample_across_stores': False
     'expand': False
     'clip': False
@@ -111,17 +112,17 @@ echelon_params:
 
 params_by_dataset : 
   'train': 
-    'n_samples': 1024 
-    'batch_size': 128  # Values tested: 1024, 8192
-    'periods': 100 
+    'n_samples': 8192 
+    'batch_size': 1024  # Values tested: 1024, 8192
+    'periods': 50 
     'ignore_periods': 16 
   'dev': 
-    'n_samples': 1024 
-    'batch_size': 128 
-    'periods': 100 
+    'n_samples': 8192 
+    'batch_size': 1024 
+    'periods': 50 
     'ignore_periods': 16 
   'test': 
-    'n_samples': 1024 
-    'batch_size': 128 
-    'periods': 100
+    'n_samples': 8192 
+    'batch_size': 1024 
+    'periods': 50
     'ignore_periods': 16

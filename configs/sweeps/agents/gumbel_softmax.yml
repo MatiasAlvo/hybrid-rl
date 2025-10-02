@@ -16,8 +16,8 @@ parameters:
       - true
   buffer_periods:
     values:
-      - 50
-      # - 10
+      - 10
+      - 30
   clip_by_component:
     values:
       - true
@@ -25,8 +25,6 @@ parameters:
     distribution: log_uniform_values
     max: 0.01
     min: 0.0001
-    # max: 0.0001
-    # min: 0.00001
   max_grad_norm:
     distribution: uniform
     max: 10
@@ -41,8 +39,7 @@ parameters:
   policy_activation:
     values:
       - Tanh
-      # - ELU
-      # - ReLU
+      - ELU
   reward_scaling_pathwise:
     values:
       - true

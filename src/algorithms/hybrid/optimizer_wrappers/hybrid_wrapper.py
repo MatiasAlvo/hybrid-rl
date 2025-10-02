@@ -529,18 +529,6 @@ class HybridWrapper(BaseOptimizerWrapper):
                 res_squared = res ** 2
                 value_loss = 0.5 * ((newvalue.squeeze() - mb_data['returns'].detach()) ** 2).mean()
             value_loss = processed_data['vf_coef'] * value_loss
-
-            self.optimizer.zero_grad()
-            value_loss.backward(retain_graph=True)
-
-            cont_nonzero = []
-            for n, p in self.model.named_parameters():
-                if ('continuous' in n) and (p.grad is not None):
-                    if p.grad.abs().max().item() > 0:
-                        cont_nonzero.append((n, p.grad.abs().mean().item()))
-
-            assert len(cont_nonzero) == 0, f"Continuous params got grad from policy term: {cont_nonzero}"
-            self.optimizer.zero_grad()
         
         # Compute entropy loss if needed
         raw_entropy = None
@@ -628,6 +616,20 @@ class HybridWrapper(BaseOptimizerWrapper):
             
             # Perform optimizer step
             self.optimizer.step()
+            
+            # Optional: Verify parameter updates (uncomment for debugging)
+            # if self._step_count % 50 == 0:  # Every 50 steps
+            #     print(f"\n=== PARAMETER UPDATE VERIFICATION (Step {self._step_count}) ===")
+            #     for i, param_group in enumerate(self.optimizer.param_groups):
+            #         group_name = param_group.get('name', f'group_{i}')
+            #         lr = param_group['lr']
+            #         print(f"Group '{group_name}' (LR={lr:.6f}):")
+            #         for j, param in enumerate(param_group['params'][:2]):  # Show first 2 params
+            #             if param.grad is not None:
+            #                 grad_norm = param.grad.norm().item()
+            #                 param_norm = param.norm().item()
+            #                 print(f"  Param {j}: grad_norm={grad_norm:.6f}, param_norm={param_norm:.6f}")
+            #     print("=" * 60)
         
         return grad_metrics
     def _clip_gradients_by_component_debug(self, max_grad_norm):

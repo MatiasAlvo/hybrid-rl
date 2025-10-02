@@ -173,7 +173,10 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     feature_registry = None
     # Initialize range manager if this is a hybrid problem
     if problem_params.get('is_hybrid', False):
-        range_manager = RangeManager(problem_params, device=device)
+        # Combine problem_params with policy config for range manager
+        range_manager_config = problem_params.copy()
+        range_manager_config.update(nn_params['policy_network'])
+        range_manager = RangeManager(range_manager_config, device=device)
         network_dims = range_manager.get_network_dimensions()
         print(f'Network dimensions: {network_dims}')
         
