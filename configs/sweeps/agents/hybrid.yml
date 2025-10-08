@@ -37,8 +37,8 @@ parameters:
     min: 0.92
   learning_rate:
     distribution: log_uniform_values
-    max: 0.01
-    min: 0.0001
+    max: 0.001
+    min: 0.00001
   max_grad_norm:
     distribution: uniform
     max: 10
@@ -84,6 +84,10 @@ parameters:
     values: 
       - 1.0
       - 5.0
+  normalize_by_mean_demand:
+    values:
+      - true
+      - false
   use_wandb:
     values:
       - true 

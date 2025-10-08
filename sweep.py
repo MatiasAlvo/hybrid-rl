@@ -126,6 +126,7 @@ def train_sweep(sweep_config):
                 # Add mapping for continuous scale parameter - updated path
                 'continuous_scale': ('hyperparams', ['nn_params', 'policy_network', 'continuous_scale']),
                 'continuous_shift': ('hyperparams', ['nn_params', 'policy_network', 'continuous_shift']),
+                'normalize_by_mean_demand': ('hyperparams', ['nn_params', 'policy_network', 'normalize_by_mean_demand']),
                 'discrete_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'discrete']),
                 'use_wandb': ('hyperparams', ['logging_params', 'use_wandb']),
                 # Add mapping for threshold parameter

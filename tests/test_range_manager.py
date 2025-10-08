@@ -22,7 +22,7 @@ def test_range_manager():
     }
 
     # Initialize RangeManager
-    manager = RangeManager(config)
+    manager = RangeManager(config, device='cpu')
 
     # Print computed ranges
     print("\nComputed Ranges:")

@@ -96,7 +96,7 @@ class Scenario():
         However, if it is generated, the split is according to sample indexes
         """
 
-        split_by = {'sample_index': ['underage_costs', 'holding_costs', 'lead_times', 'initial_inventories', 'initial_warehouse_inventories'], 
+        split_by = {'sample_index': ['underage_costs', 'holding_costs', 'procurement_costs', 'lead_times', 'initial_inventories', 'initial_warehouse_inventories'], 
                     'period': []}
 
         if self.store_params['demand']['distribution'] == 'real':
@@ -131,17 +131,11 @@ class Scenario():
 
         # Calculate total periods needed: periods + period_shift to avoid demands starting at 0
         period_shift = self.observation_params.get('demand', {}).get('period_shift', 0)
-        total_periods_needed = self.periods + period_shift
         
-        # Temporarily store original periods and update for demand generation
-        original_periods = self.periods
-        self.periods = total_periods_needed
+        total_periods_needed = self.periods + period_shift
 
         # Sample demand traces
-        demand = demand_generator_functions[demand_params['distribution']](problem_params, demand_params, seeds['demand'])
-
-        # Restore original periods
-        self.periods = original_periods
+        demand = demand_generator_functions[demand_params['distribution']](problem_params, demand_params, seeds['demand'], total_periods_needed)
 
         if demand_params['clip']:  # Truncate at 0 from below if specified
             demand = np.clip(demand, 0, None)
@@ -160,7 +154,7 @@ class Scenario():
             except Exception as e:
                 print(f'Error: {e}')
     
-    def read_real_demand_data(self, problem_params, demand_params, seed):
+    def read_real_demand_data(self, problem_params, demand_params, seed, periods=None):
         """
         Read real demand data
         """
@@ -176,7 +170,7 @@ class Scenario():
         if demand_params['sample_across_stores']:  # only supported for normal demand
             demand_params.update(self.sample_normal_mean_and_std(problem_params, demand_params, seeds))
     
-    def generate_normal_demand(self, problem_params, demand_params, seed):
+    def generate_normal_demand(self, problem_params, demand_params, seed, periods):
         """
         Generate normal demand data
         """
@@ -188,7 +182,7 @@ class Scenario():
         if problem_params['n_stores'] == 1:
             demand = np.random.normal(demand_params['mean'], 
                                       demand_params['std'], 
-                                      size=(self.num_samples, 1, self.periods)
+                                      size=(self.num_samples, 1, periods)
                                       )
         else:
             # Calculate covariance matrix and sample from multivariate normal
@@ -198,18 +192,18 @@ class Scenario():
                            ] 
                            for j, v2 in enumerate(demand_params['std'])
                            ]
-            demand = np.random.multivariate_normal(demand_params['mean'], cov=cov_matrix, size=(self.num_samples, self.periods))
+            demand = np.random.multivariate_normal(demand_params['mean'], cov=cov_matrix, size=(self.num_samples, periods))
             demand = np.transpose(demand, (0, 2, 1))
 
         return demand
 
-    def generate_poisson_demand(self, problem_params, demand_params, seed):
+    def generate_poisson_demand(self, problem_params, demand_params, seed, periods):
 
         # Set seed
         if seed is not None:
             np.random.seed(seed)
         
-        return np.random.poisson(demand_params['mean'], size=(self.num_samples, problem_params['n_stores'], self.periods))
+        return np.random.poisson(demand_params['mean'], size=(self.num_samples, problem_params['n_stores'], periods))
 
     def generate_data(self, demand_params, **kwargs):
         """

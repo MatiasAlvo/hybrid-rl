@@ -41,7 +41,6 @@ optimizer_params:
   'learning_rate': 0.00015 # well-performing for HybridAgent
   'anneal_lr': true
   'weight_decay': 0.0
-  'gradient_clip': 1.0
   'ppo_params':
     'clip_coef': 0.15
     'num_epochs': 1

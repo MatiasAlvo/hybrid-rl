@@ -67,6 +67,116 @@ class FeatureRegistry:
         """Return observation keys for value network"""
         # You might want to customize this based on your specific environment
         return ['store_inventories']
+    
+    def expand_batch(self, x, target):
+        """
+        Expand batch dimension to match target tensor shape.
+        x: [S], target: [S, ...]
+        Returns: x expanded to [S, 1, 1, ...] to match target dimensions
+        """
+        return x.view(-1, *([1] * (target.dim() - 1)))
+    
+    def prepare_inputs(self, observation):
+        """
+        Prepare observation inputs by normalizing quantity-related features and then flattening.
+        This method normalizes quantity-related inputs by mean demand if enabled, then flattens
+        the observation following the same logic as the policy network.
+        
+        Args:
+            observation: Dictionary containing observation data
+            
+        Returns:
+            Flattened tensor ready for network input
+        """
+        if isinstance(observation, dict):
+            # Get normalization setting from policy config
+            policy_params = self.config.get('policy_network', {})
+            normalize_by_mean_demand = policy_params.get('normalize_by_mean_demand', False)
+            
+            # Create a copy of observation to avoid modifying the original
+            processed_obs = observation.copy()
+            
+            # Apply normalization if enabled
+            if normalize_by_mean_demand and 'past_demands' in observation:
+                # Compute mean demand per sample: [batch, stores, periods] -> [batch]
+                mean_demand = observation['past_demands'].mean(dim=(1, 2))  # Mean across stores and periods
+                
+                # Stabilize normalization by clamping extreme values
+                # This prevents division by very small numbers (which causes huge scaling)
+                # and very large numbers (which causes tiny scaling)
+                mean_demand = torch.clamp(mean_demand, min=1.0, max=100.0)
+                
+                # Store normalization constant for later use
+                self._last_normalization_constant = mean_demand
+                
+                # Normalize quantity-related features
+                quantity_features = ['store_inventories', 'past_demands', 'past_arrivals', 'past_orders']
+                for feature_name in quantity_features:
+                    if feature_name in processed_obs:
+                        # Use helper function to properly expand mean_demand to match feature shape
+                        mean_demand_expanded = self.expand_batch(mean_demand, processed_obs[feature_name])
+                        processed_obs[feature_name] = processed_obs[feature_name] / (mean_demand_expanded + 1e-8)
+            
+            # Get observation keys from policy config
+            observation_keys = policy_params.get('observation_keys', ['store_inventories'])
+            
+            # Concatenate features based on observation keys
+            features = []
+            for key in observation_keys:
+                if key != 'current_period' and key in processed_obs:
+                    features.append(processed_obs[key].flatten(start_dim=1))
+            
+            # Handle current_period separately if present
+            if 'current_period' in observation_keys and 'current_period' in processed_obs:
+                raise NotImplementedError("Current period is not supported. Check impllementation first.")
+                current_period_value = processed_obs['current_period'].unsqueeze(0).expand(features[0].size(0), -1)
+                features = [current_period_value] + features
+            
+            if features:
+                return torch.cat(features, dim=-1)
+            else:
+                # Fallback to store_inventories if no other features found
+                return processed_obs['store_inventories'].flatten(start_dim=1)
+        else:
+            # observation is already a tensor, just flatten it
+            return observation.flatten(start_dim=1)
+    
+    def flatten_inputs(self, observation):
+        """
+        Flatten observation inputs following the same logic as the policy network.
+        This method processes observation dictionaries and concatenates features based on observation_keys.
+        
+        Args:
+            observation: Dictionary containing observation data
+            
+        Returns:
+            Flattened tensor ready for network input
+        """
+        if isinstance(observation, dict):
+            # Get observation keys from policy config
+            policy_params = self.config.get('policy_network', {})
+            observation_keys = policy_params.get('observation_keys', ['store_inventories'])
+            
+            # Concatenate features based on observation keys
+            features = []
+            for key in observation_keys:
+                if key != 'current_period' and key in observation:
+                    features.append(observation[key].flatten(start_dim=1))
+            
+            # Handle current_period separately if present
+            if 'current_period' in observation_keys and 'current_period' in observation:
+                raise NotImplementedError("Current period is not supported. Check impllementation first.")
+                current_period_value = observation['current_period'].unsqueeze(0).expand(features[0].size(0), -1)
+                features = [current_period_value] + features
+            
+            if features:
+                return torch.cat(features, dim=-1)
+            else:
+                # Fallback to store_inventories if no other features found
+                return observation['store_inventories'].flatten(start_dim=1)
+        else:
+            # observation is already a tensor, just flatten it
+            return observation.flatten(start_dim=1)
 
     def process_discrete_output(self, raw_discrete_logits, argmax=False, sample=False, straight_through=False):
         """
@@ -192,7 +302,6 @@ class FeatureRegistry:
             # Get indices of selected actions (where the 1s are in discrete_probs)
             discrete_action_indices = discrete_probs.argmax(dim=-1)  # This gives us indices instead of one-hot
             # Get logits for selected actions - using gather with proper reshaping
-            logits = raw_outputs['discrete'].gather(-1, discrete_action_indices.unsqueeze(-1)).squeeze(-1)
         
         # Get continuous values if continuous head exists
         continuous_values = None
@@ -217,7 +326,8 @@ class FeatureRegistry:
             continuous_values = self.range_manager.scale_continuous_by_ranges(
                 continuous_values,
                 self.range_manager.get_continuous_ranges(),
-                observations=observations
+                observations=observations,
+                feature_registry=self
             )
         
         # Combine discrete and continuous actions into feature-specific actions
@@ -226,24 +336,11 @@ class FeatureRegistry:
             continuous_values
         )
         
-        # If using random_continuous (GaussianPPO), add continuous log probs of selected actions
-        if random_continuous and 'continuous_mean' in raw_outputs and 'continuous_log_std' in raw_outputs:
-            continuous_mean = raw_outputs['continuous_mean']
-            continuous_log_std = torch.clamp(raw_outputs['continuous_log_std'], min=-20, max=2)
-            continuous_std = torch.exp(continuous_log_std)
-            
-            # Get log probs for all continuous actions
-            normal_dist = torch.distributions.Normal(continuous_mean, continuous_std)
-            continuous_log_probs = normal_dist.log_prob(raw_continuous_samples)  # [batch, n_discrete, n_continuous]
-            
-            # Add selected continuous log probs to discrete logits
-            logits = logits + continuous_log_probs.gather(-1, discrete_action_indices.unsqueeze(-1)).squeeze(-1)
         
         # Create action dictionary with common format for all agent types
         action_dict = {
             'discrete_probs': discrete_probs,  # One-hot format
             'discrete_action_indices': discrete_action_indices,  # Index format
-            'logits': logits,  # Combined logits of selected actions (both discrete and continuous)
             'continuous_values': continuous_values,
             'feature_actions': feature_actions
         }
@@ -305,7 +402,8 @@ class FeatureRegistry:
         continuous_values = self.range_manager.scale_continuous_by_ranges(
             continuous_values,
             self.range_manager.get_continuous_ranges(),
-            observations=observations
+            observations=observations,
+            feature_registry=self
         )
         
         # Create result dictionary

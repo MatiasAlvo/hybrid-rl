@@ -119,27 +119,33 @@ class Trainer():
                 if 'actions' in train_metrics:
                     self.logger.log_action_distribution(train_metrics['actions'], epoch)
                 
-                # Generate and log inventory vs action plot for dev set with dev loss
+                # Generate and log plots for dev set with dev loss (if enabled in config)
                 if 'trajectory_data' in dev_metrics:
-                    self.log_inventory_action_plot(
-                        dev_metrics['trajectory_data'], 
-                        epoch, 
-                        dev_loss=dev_metrics['loss/reported']
-                    )
+                    logging_params = config.hyperparams_config.get('logging_params', {})
+                    
+                    # Generate and log inventory vs action plot for dev set with dev loss
+                    if logging_params.get('log_inventory_action_plot', False):
+                        self.log_inventory_action_plot(
+                            dev_metrics['trajectory_data'], 
+                            epoch, 
+                            dev_loss=dev_metrics['loss/reported']
+                        )
                     
                     # Generate and log inventory vs value plot for dev set with dev loss
-                    self.log_inventory_value_plot(
-                        dev_metrics['trajectory_data'], 
-                        epoch, 
-                        dev_loss=dev_metrics['loss/reported']
-                    )
+                    if logging_params.get('log_inventory_value_plot', False):
+                        self.log_inventory_value_plot(
+                            dev_metrics['trajectory_data'], 
+                            epoch, 
+                            dev_loss=dev_metrics['loss/reported']
+                        )
                     
                     # Generate and log inventory vs discrete action 0 probability plot for dev set with dev loss
-                    self.log_inventory_discrete_action0_prob_plot(
-                        dev_metrics['trajectory_data'], 
-                        epoch, 
-                        dev_loss=dev_metrics['loss/reported']
-                    )
+                    if logging_params.get('log_inventory_discrete_action0_prob_plot', False):
+                        self.log_inventory_discrete_action0_prob_plot(
+                            dev_metrics['trajectory_data'], 
+                            epoch, 
+                            dev_loss=dev_metrics['loss/reported']
+                        )
                 
                 self.logger.flush_metrics()
             
@@ -363,9 +369,6 @@ class Trainer():
         observation, _ = simulator.reset(periods, problem_params, data_batch, observation_params)
         
         for t in range(periods):
-            # Store observation if collecting trajectories
-            vectorized_obs = self.vectorize_observation(observation, observation_keys, model)
-
             # Add internal data to observation
             observation_and_internal_data = self._prepare_observation_with_internal_data(observation, simulator)
 
@@ -374,6 +377,12 @@ class Trainer():
             action_dict = model_output.get('action_dict')
             raw_outputs = model_output.get('raw_outputs', {})
             value = model_output.get('value', None)
+            
+            # Get vectorized observation from model output (more efficient than recomputing)
+            vectorized_obs = model_output.get('vectorized_observation')
+            # if vectorized_obs is None:
+            #     # Fallback to old method if not available
+            #     vectorized_obs = self.vectorize_observation(observation, observation_keys, model)
             
             # Collect action distribution data (only from the last period)
             if t == periods - 1:
@@ -678,10 +687,10 @@ class Trainer():
         model: object, optional
             The model object to validate observation_keys consistency
         """
-        # Validate observation_keys consistency between policy and value networks
-        if not hasattr(self, '_observation_keys_validated') and model is not None:
-            self._validate_observation_keys_consistency(model)
-            self._observation_keys_validated = True
+        # # Validate observation_keys consistency between policy and value networks
+        # if not hasattr(self, '_observation_keys_validated') and model is not None:
+        #     self._validate_observation_keys_consistency(model)
+        #     self._observation_keys_validated = True
         
         if observation_keys is None:
             # Default behavior - only track store inventories

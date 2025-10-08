@@ -868,9 +868,10 @@ class HybridPolicy(PolicyNetwork):
             )
         self.to(self.device)
         
-    def forward(self, x, process_state=True):
+    def forward(self, x, process_state=False):
         if process_state:
             x = self.flatten_inputs(x)
+            y = x[0]
             # # slightly jitter the input
             # x = x + torch.randn_like(x)*0.01
 
@@ -921,9 +922,12 @@ class HybridPolicy(PolicyNetwork):
             # outputs['discrete'][:, :, 1] = 100000000.0
             # outputs['discrete'] = self.heads_layers['discrete'](base_features)
             
+        # Add vectorized observation to outputs for efficiency
+        outputs['vectorized_observation'] = x
+        
         return outputs
 
-    def forward_backup(self, x, process_state=True):
+    def forward_backup(self, x, process_state=False):
         # If process_state is True, then we process the state to get the features 
         if process_state:
             x = self.flatten_inputs(x)
@@ -1009,7 +1013,7 @@ class SeparateNetworkPolicy(PolicyNetwork):
         
         return layers
     
-    def forward(self, x, process_state=True):
+    def forward(self, x, process_state=False):
         if process_state:
             x = self.flatten_inputs(x)
         
@@ -1033,7 +1037,7 @@ class SeparateNetworkPolicy(PolicyNetwork):
 
 class HybridPolicySS(HybridPolicy):
     """Policy network for hybrid discrete/continuous actions with a fixed S=62 continuous policy"""
-    def forward(self, x, process_state=True):
+    def forward(self, x, process_state=False):
 
         inventory_sum = None
         # Process state if needed

@@ -337,13 +337,14 @@ class RangeManager:
         
         return activated_values
     
-    def scale_continuous_by_ranges(self, continuous_values, ranges, observations=None):
+    def scale_continuous_by_ranges(self, continuous_values, ranges, observations=None, feature_registry=None):
         """
         Scale activated values to actual ranges while maintaining input shape
         Args:
             continuous_values: tensor of shape [batch_size, n_stores, n_ranges]
             ranges: list of [min, max] pairs for each range
             observations: dict containing observation data (optional)
+            feature_registry: FeatureRegistry instance for accessing normalization constants
         Returns:
             scaled values with same shape as input
         """
@@ -353,18 +354,19 @@ class RangeManager:
         # Apply standard scaling first
         scaled_values = continuous_values * self.post_activation_scales + self.post_activation_shifts
         
-        # Apply mean demand scaling if enabled and observations provided
-        if (self.scale_by_mean_demand and observations is not None and 
-            'past_demands' in observations):
-            # Calculate mean demand: [batch, stores, past_periods] -> [batch, stores]
-            mean_demand = observations['past_demands'].mean(dim=-1)
+        # Apply denormalization if normalization was used during input preparation
+        if (feature_registry is not None and 
+            hasattr(feature_registry, '_last_normalization_constant') and
+            feature_registry._last_normalization_constant is not None):
             
-            # Expand to match continuous_values shape: [batch, stores] -> [batch, stores, n_ranges]
-            mean_demand_expanded = mean_demand.unsqueeze(-1).expand_as(continuous_values)
+            # Get the normalization constant used during input preparation
+            mean_demand = feature_registry._last_normalization_constant
             
-            # Apply mean demand scaling
-            scaled_values = scaled_values * 1
-            # scaled_values = scaled_values * mean_demand_expanded
+            # Expand to match continuous_values shape: [batch] -> [batch, n_stores, n_ranges]
+            mean_demand_expanded = mean_demand.view(-1, 1, 1).expand_as(continuous_values)
+            
+            # Denormalize by multiplying by mean demand
+            scaled_values = scaled_values * mean_demand_expanded
         
         return scaled_values
     

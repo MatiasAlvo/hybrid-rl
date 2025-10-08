@@ -74,3 +74,7 @@ parameters:
     values:
       - 1.0
       - 5.0
+  normalize_by_mean_demand:
+    values:
+      - true
+      - false

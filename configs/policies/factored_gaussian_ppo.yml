@@ -18,15 +18,19 @@ logging_params:
   'exp_name': "factored_gaussian_ppo"
   'env_name': "inventory"
   'setting_name': "one_store_fixed_costs"
+  'log_inventory_action_plot': false
+  'log_inventory_value_plot': false
+  'log_inventory_discrete_action0_prob_plot': false
 
 agent_params:
   'agent_type': 'factored_gaussian_ppo'
+  'fixed_std': false  # Set to false for state-dependent standard deviation
 
 optimizer_params:
-  'learning_rate': 0.0015
+  # 'learning_rate': 0.015
+  'learning_rate': 0.0002
   'anneal_lr': true
   'weight_decay': 0.0
-  'gradient_clip': 1.0
   'ppo_params':
     'clip_coef': 0.2
     'gamma': 0.95
@@ -39,24 +43,26 @@ optimizer_params:
     'clip_value_loss': false
     'entropy_coef': 0.01
     'use_gae': true
-    'num_epochs': 1
+    'num_epochs': 5
     'value_function_coef': 0.1
     'clip_by_component': true
+    'buffer_periods': 20
     'max_grad_norm': 5.0
 
 nn_params:
   policy_network:
     name: 'factored_policy'
-    input_size: 2
+    input_size: null  # Let it be determined automatically
     hidden_layers: [64, 64]
-    activation: 'Tanh'
+    activation: 'ELU'
+    # activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0
-    continuous_shift: 1.0 # recall this has to be positive when using softplus
-    observation_keys: [
-      'store_inventories'
-    ]
+    continuous_shift: 1.0  # Match hybrid policy
+    # Updated observation keys to match hybrid policy
+    observation_keys: ['store_inventories', 'holding_costs', 'underage_costs', 'lead_times', 'procurement_costs', 'past_demands', 'days_from_christmas']
+    normalize_by_mean_demand: true  # Normalize quantity-related inputs by mean demand
     heads:
       discrete:
         enabled: true
@@ -69,12 +75,11 @@ nn_params:
 
   value_network:
     enabled: true
-    input_size: 2
+    input_size: null  # Let it be determined automatically
     hidden_layers: [64, 64]
     activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
     output_size: 1
-    observation_keys: [
-      'store_inventories'
-    ]
+    # Updated observation keys to match policy network
+    observation_keys: ['store_inventories', 'holding_costs', 'underage_costs', 'lead_times', 'procurement_costs', 'past_demands', 'days_from_christmas']

@@ -50,13 +50,12 @@ class BaseAgent(nn.Module):
         value_net = ValueNetwork(value_params, device=self.device)
         
         # Ensure observation_keys is properly set
-        if hasattr(value_params, 'observation_keys'):
+        if 'observation_keys' in value_params:
             value_net.observation_keys = value_params['observation_keys']
-        elif hasattr(self.feature_registry, 'get_observation_keys'):
-            value_net.observation_keys = self.feature_registry.get_observation_keys()
         else:
-            # Default fallback - you may need to adjust this based on your implementation
-            value_net.observation_keys = ['store_inventories']
+            print("Warning: No observation_keys found in value network config, falling back to policy network observation keys")
+            # Fall back to policy network observation keys for consistency
+            value_net.observation_keys = self.policy.observation_keys
             
         return value_net
     
@@ -220,7 +219,7 @@ class BaseAgent(nn.Module):
         
         Args:
             config: Configuration dictionary
-            continuous_size: Size of continuous head output. If None, defaults to 1.
+            continuous_size: Size of continuous head output. If None, determined by fixed_std parameter.
         
         Returns:
             Initialized factored policy network
@@ -233,11 +232,19 @@ class BaseAgent(nn.Module):
         policy_params['policy_network']['input_size'] = network_dims['input_size']
         policy_params['policy_network']['heads']['discrete']['size'] = network_dims['n_discrete']
         
-        # For continuous head, we only output a single value (not per discrete action)
-        # unless specified otherwise
-        policy_params['policy_network']['heads']['continuous']['size'] = (
-            continuous_size if continuous_size is not None else 1
-        )
+        # Determine continuous head size based on fixed_std parameter
+        if continuous_size is not None:
+            # Use explicitly provided size
+            policy_params['policy_network']['heads']['continuous']['size'] = continuous_size
+        else:
+            # Determine size based on fixed_std parameter
+            fixed_std = config.get('agent_params', {}).get('fixed_std', True)
+            if fixed_std:
+                # Fixed std: only output mean (size = 1)
+                policy_params['policy_network']['heads']['continuous']['size'] = 1
+            else:
+                # State-dependent std: output mean + log_std (size = 2)
+                policy_params['policy_network']['heads']['continuous']['size'] = 2
         
         # Create new policy network from the FactoredPolicy class
         policy_class = NeuralNetworkCreator().get_architecture("factored_policy")
@@ -273,13 +280,17 @@ class HybridAgent(BaseAgent):
             continuous_size = network_dims['n_continuous']
             
         policy_params['policy_network']['heads']['continuous']['size'] = continuous_size
+        print(f"continuous size: {continuous_size}")
         
         return NeuralNetworkCreator().get_architecture(policy_params['policy_network']['name'])(policy_params, device=self.device)
 
     def forward(self, observation, train=True):
         """Forward pass through the agent using the new processing functions"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
         # Get raw outputs from policy
-        raw_outputs = self.policy(observation)
+        raw_outputs = self.policy(processed_obs, process_state=False)
         
         # Debug raw outputs
         if isinstance(raw_outputs, dict) and 'discrete' in raw_outputs:
@@ -330,18 +341,22 @@ class HybridAgent(BaseAgent):
             action_dict['continuous_log_probs'] = continuous_output['continuous_log_probs']
         
         # Get value if value network exists
-        value = self.value_net(observation) if self.value_net is not None else None
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
         
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
         }
     
     def forward_old(self, observation, train=True):
         """Forward pass through the agent"""
+        # Flatten inputs using feature registry
+        processed_obs = self.feature_registry.flatten_inputs(observation)
+        
         # Get raw outputs from policy
-        raw_outputs = self.policy(observation)
+        raw_outputs = self.policy(processed_obs, process_state=False)
         
         # Debug raw outputs
         if isinstance(raw_outputs, dict) and 'discrete' in raw_outputs:
@@ -355,12 +370,13 @@ class HybridAgent(BaseAgent):
         # Process network output
         action_dict = self.feature_registry.process_network_output(raw_outputs, argmax=False, sample=True, observations=observation)
         # Get value if value network exists
-        value = self.value_net(observation) if self.value_net is not None else None
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
 
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
         }
 
     def get_entropy(self, logits):
@@ -448,7 +464,7 @@ class FactoredHybridAgent(HybridAgent):
         """Forward pass: first sample discrete action, then get continuous mean"""
         # Process observation to get features if needed
         if process_state:
-            processed_obs = self.policy.flatten_inputs(observation)
+            processed_obs = self.feature_registry.prepare_inputs(observation)
         else:
             processed_obs = observation
             
@@ -503,7 +519,8 @@ class FactoredHybridAgent(HybridAgent):
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs if process_state else None
         }
 
     def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
@@ -563,8 +580,11 @@ class GumbelSoftmaxAgent(HybridAgent):
     
     def forward(self, observation, train=True):
         """Forward pass through the agent using Gumbel-Softmax for discrete actions"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
         # Get raw outputs from policy
-        raw_outputs = self.policy(observation)
+        raw_outputs = self.policy(processed_obs, process_state=False)
         
         # Apply Gumbel-Softmax to discrete logits during training
         if 'discrete' in raw_outputs:
@@ -596,12 +616,13 @@ class GumbelSoftmaxAgent(HybridAgent):
         )
         
         # Get value if value network exists
-        value = self.value_net(observation) if self.value_net is not None else None
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
 
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
         }
     
     def get_log_probs_value_and_entropy(self, processed_observation, action_indices, continuous_samples=None):
@@ -635,7 +656,7 @@ class FactoredGumbelSoftmaxAgent(GumbelSoftmaxAgent):
     
     def forward(self, observation, train=True, process_state=True):
         """Forward pass: evaluate continuous network for all possible discrete actions"""
-        processed_obs = self.policy.flatten_inputs(observation)            
+        processed_obs = self.feature_registry.prepare_inputs(observation)            
         # Get discrete logits
         discrete_logits = self.policy.get_discrete_output(processed_obs)
 
@@ -695,7 +716,8 @@ class FactoredGumbelSoftmaxAgent(GumbelSoftmaxAgent):
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs if process_state else None
         }   
 
     def forward_old(self, observation, train=True, process_state=True):
@@ -760,7 +782,8 @@ class FactoredGumbelSoftmaxAgent(GumbelSoftmaxAgent):
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs if process_state else None
         }   
   
 class ContinuousOnlyAgent(BaseAgent):
@@ -820,8 +843,11 @@ class ContinuousOnlyAgent(BaseAgent):
     
     def forward(self, observation, train=True):
         """Forward pass through the agent using only continuous actions"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
         # Get raw outputs from policy
-        raw_outputs = self.policy(observation)
+        raw_outputs = self.policy(processed_obs, process_state=False)
         
         # Process network output with zero-out functionality
         continuous_values = raw_outputs['continuous']
@@ -843,7 +869,8 @@ class ContinuousOnlyAgent(BaseAgent):
         return {
             'action_dict': action_dict,
             'value': None,  # No value network for this agent
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
         }
     
     def get_log_probs_value_and_entropy(self, processed_observation, action_indices):
@@ -890,8 +917,11 @@ class GaussianPPOAgent(HybridAgent):
     
     def forward(self, observation, train=True):
         """Forward pass through the agent"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
         # Get raw outputs from policy
-        raw_outputs = self.policy(observation)
+        raw_outputs = self.policy(processed_obs, process_state=False)
         
         # Split continuous outputs into mean and log_std
         continuous_outputs = raw_outputs['continuous']
@@ -920,7 +950,7 @@ class GaussianPPOAgent(HybridAgent):
         )
         
         # Get value if value network exists
-        value = self.value_net(observation) if self.value_net is not None else None
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
         
         # Store the raw continuous samples for later use in PPO
         if 'continuous_samples' in action_dict:
@@ -929,7 +959,8 @@ class GaussianPPOAgent(HybridAgent):
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': raw_outputs.get('vectorized_observation')
         }
     
     def get_entropy(self, logits):
@@ -938,7 +969,13 @@ class GaussianPPOAgent(HybridAgent):
         return distribution.entropy()
     
     def get_gaussian_entropy(self, log_std):
-        """Get entropy of a Gaussian distribution"""
+        """Get entropy of a Gaussian distribution
+        
+        Args:
+            log_std: Log standard deviation. Can be scalar or vector.
+                    For fixed std: scalar tensor
+                    For state-dependent std: vector tensor with shape matching the mean
+        """
         # Entropy of a Gaussian is 0.5 * log(2*pi*e*sigma^2)
         # = 0.5 + 0.5*log(2*pi) + log_std
         return 0.5 + 0.5 * torch.log(2 * torch.tensor(torch.pi, device=log_std.device)) + log_std
@@ -986,6 +1023,8 @@ class GaussianPPOAgent(HybridAgent):
             else:
                 continuous_log_std = continuous_outputs[..., n_continuous:]
             
+            # Apply the same clamping as in process_network_output for consistency
+            continuous_log_std = torch.clamp(continuous_log_std, min=-20, max=2)
             continuous_std = torch.exp(continuous_log_std)
             normal_dist = torch.distributions.Normal(continuous_mean, continuous_std)
             
@@ -1042,15 +1081,23 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         # Set flag to identify this as a factored agent
         self.factored = True
         
+        # Check if we're using fixed or state-dependent std
+        self.fixed_std = config.get('agent_params', {}).get('fixed_std', True)
+        
         # Initialize base class
         super().__init__(config, feature_registry, device)
         
-        # Replace vector log_std with scalar
+        # Handle log_std parameter based on fixed_std setting
         if hasattr(self, 'log_std'):
             # Delete existing parameter if it exists
             del self.log_std
-        # Create new scalar parameter
-        self.log_std = nn.Parameter(torch.zeros(1, device=device))
+            
+        if self.fixed_std:
+            # Create new scalar parameter for fixed std
+            self.log_std = nn.Parameter(torch.zeros(1, device=device))
+        else:
+            # No log_std parameter needed - it will come from network output
+            self.log_std = None
     
     def _init_policy(self, config):
         """Initialize policy with separate discrete and continuous networks"""
@@ -1060,7 +1107,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         """Forward pass: first sample discrete action, then get continuous mean"""
         # Process observation to get features if needed
         if process_state:
-            processed_obs = self.policy.flatten_inputs(observation)
+            processed_obs = self.feature_registry.prepare_inputs(observation)
         else:
             processed_obs = observation
             
@@ -1080,8 +1127,19 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         # Create one-hot encoding for the sampled discrete action
         discrete_one_hot = torch.zeros_like(discrete_logits).scatter_(-1, discrete_action_reshaped, 1)
         
-        # Get continuous mean (conditioned on sampled discrete action)
-        selected_continuous_mean = self.policy.get_continuous_output(processed_obs, discrete_one_hot.squeeze(1))
+        # Get continuous output (conditioned on sampled discrete action)
+        continuous_output = self.policy.get_continuous_output(processed_obs, discrete_one_hot.squeeze(1))
+        
+        if self.fixed_std:
+            # Fixed std: continuous_output is just the mean
+            selected_continuous_mean = continuous_output
+            # Use the scalar log_std parameter
+            selected_log_std = self.log_std
+        else:
+            # State-dependent std: continuous_output contains both mean and log_std
+            n_continuous = continuous_output.size(-1) // 2
+            selected_continuous_mean = continuous_output[..., :n_continuous]
+            selected_log_std = continuous_output[..., n_continuous:]
         
         # First remove the extra dimension, and then expand along the features dimension
         # this is like "playing" the same continuous mean for all discrete actions
@@ -1089,8 +1147,12 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         selected_continuous_mean = selected_continuous_mean.squeeze(2)
         expanded_continuous_mean = selected_continuous_mean.unsqueeze(1).expand(-1, discrete_logits.size(1), discrete_logits.size(2))
         
-        # Use the scalar log_std parameter expanded to match the expanded mean's shape
-        expanded_log_std = self.log_std.expand_as(expanded_continuous_mean)
+        # Expand log_std to match the expanded mean's shape
+        if self.fixed_std:
+            expanded_log_std = selected_log_std.expand_as(expanded_continuous_mean)
+        else:
+            selected_log_std = selected_log_std.squeeze(2)
+            expanded_log_std = selected_log_std.unsqueeze(1).expand(-1, discrete_logits.size(1), discrete_logits.size(2))
         
         # Create raw_outputs dict in the format expected by process_network_output
         raw_outputs = {
@@ -1116,7 +1178,15 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
             action_dict['discrete_action'] = discrete_action
             
             # Calculate and store log probabilities for PPO using BaseAgent helper function
-            continuous_std = torch.exp(self.log_std).expand_as(selected_continuous_mean)
+            # Use the same clamped log_std that was used for sampling to ensure consistency
+            if self.fixed_std:
+                clamped_log_std = torch.clamp(self.log_std, min=-20, max=2)
+                continuous_std = torch.exp(clamped_log_std).expand_as(selected_continuous_mean)
+            else:
+                # For state-dependent std, use the selected log_std directly
+                clamped_log_std = torch.clamp(selected_log_std, min=-20, max=2)
+                continuous_std = torch.exp(clamped_log_std)
+                
             total_log_probs = self.calculate_log_probs(
                 discrete_logits,
                 discrete_action,
@@ -1127,12 +1197,13 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
             action_dict['log_probs'] = total_log_probs
         
         # Get value if value network exists
-        value = self.value_net(observation) if self.value_net is not None else None
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
 
         return {
             'action_dict': action_dict,
             'value': value,
-            'raw_outputs': raw_outputs
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs if process_state else None
         }
     
     
@@ -1141,7 +1212,8 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         params = list(self.policy.parameters())
         if self.value_net is not None:
             params += list(self.value_net.parameters())
-        params.append(self.log_std)
+        if self.log_std is not None:
+            params.append(self.log_std)
         return params
     
     def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
@@ -1161,19 +1233,28 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         # Get discrete logits from policy
         discrete_logits = self.policy.get_discrete_output(processed_observation)  # [batch, n_discrete]
         
-
         # Create one-hot encoding for discrete actions using BaseAgent helper function
         discrete_one_hot = self.get_discrete_one_hot(discrete_logits, discrete_action_indices)
         
-        # Get continuous mean conditioned on the discrete action
-        selected_continuous_mean = self.policy.get_continuous_output(
+        # Get continuous output conditioned on the discrete action
+        continuous_output = self.policy.get_continuous_output(
             processed_observation, 
             discrete_one_hot.squeeze(1)
         )
-        selected_continuous_mean = selected_continuous_mean.squeeze(2)
         
-        # Calculate continuous std
-        continuous_std = torch.exp(self.log_std).expand_as(selected_continuous_mean)
+        if self.fixed_std:
+            # Fixed std: continuous_output is just the mean
+            selected_continuous_mean = continuous_output.squeeze(2)
+            # Use the scalar log_std parameter
+            clamped_log_std = torch.clamp(self.log_std, min=-20, max=2)
+            continuous_std = torch.exp(clamped_log_std).expand_as(selected_continuous_mean)
+        else:
+            # State-dependent std: continuous_output contains both mean and log_std
+            n_continuous = continuous_output.size(-1) // 2
+            selected_continuous_mean = continuous_output[..., :n_continuous].squeeze(2)
+            selected_log_std = continuous_output[..., n_continuous:].squeeze(2)
+            clamped_log_std = torch.clamp(selected_log_std, min=-20, max=2)
+            continuous_std = torch.exp(clamped_log_std)
         
         # Use the helper function to calculate total log probabilities
         total_log_probs = self.calculate_log_probs(
@@ -1189,7 +1270,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         
         # Calculate total entropy
         discrete_entropy = self.get_entropy(discrete_logits)
-        continuous_entropy = self.get_gaussian_entropy(self.log_std)
+        continuous_entropy = self.get_gaussian_entropy(clamped_log_std)
         total_entropy = discrete_entropy + continuous_entropy
         
         return total_log_probs, value, total_entropy

@@ -1,6 +1,6 @@
 trainer_params:
   # 'epochs': 1
-  'epochs': 100
+  'epochs': 200
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -19,6 +19,9 @@ logging_params:
   'exp_name': "gumbel_softmax"
   'env_name': "inventory"
   'setting_name': "one_store_fixed_costs"
+  'log_inventory_action_plot': false
+  'log_inventory_value_plot': false
+  'log_inventory_discrete_action0_prob_plot': false
 
 agent_params:
   'agent_type': 'gumbel_softmax'
@@ -29,10 +32,10 @@ agent_params:
   'add_gumbel_noise': true
 
 optimizer_params:
-  'learning_rate': 0.0001
+  'learning_rate': 0.005
+  # 'learning_rate': 0.0001
   'anneal_lr': true
   'weight_decay': 0.0
-  'gradient_clip': 1.0
   'lr_multipliers':
     'value': 1.0
     'backbone': 1.0
@@ -61,18 +64,18 @@ optimizer_params:
 nn_params:
   policy_network:
     name: 'hybrid_policy'
-    input_size: 2
+    input_size: null  # Let it be determined automatically
     hidden_layers: [64, 64]
     activation: 'ELU'
     # activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0
-    continuous_shift: 1.0
-    # observation_keys: ['store_inventories', 'past_demands', 'holding_costs', 'underage_costs']
-    observation_keys: ['store_inventories']
-    # scale_by_mean_demand: true  # NEW PARAMETER
-    scale_by_mean_demand: false  # NEW PARAMETER
+    continuous_shift: 5.0  # Match hybrid policy
+    # Updated observation keys to match hybrid policy
+    observation_keys: ['store_inventories', 'holding_costs', 'underage_costs', 'lead_times', 'procurement_costs', 'past_demands', 'days_from_christmas']
+    normalize_by_mean_demand: true  # NEW PARAMETER
+    # scale_by_mean_demand: false  # NEW PARAMETER
     heads:
       discrete:
         enabled: true

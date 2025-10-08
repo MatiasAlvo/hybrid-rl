@@ -11,13 +11,26 @@ parameters:
   add_gumbel_noise:
     values:
       - true
+      - false
+  initial_temperature:
+    distribution: log_uniform_values
+    max: 1
+    min: 0.5
+  min_temperature:
+    distribution: log_uniform_values
+    max: 0.2
+    min: 0.001
+  temperature_decay:
+    distribution: log_uniform_values
+    max: 0.99
+    min: 0.95
   anneal_lr:
     values:
       - true
   buffer_periods:
     values:
       - 10
-      - 30
+      - 20
   clip_by_component:
     values:
       - true
@@ -26,9 +39,9 @@ parameters:
     max: 0.01
     min: 0.0001
   max_grad_norm:
-    distribution: uniform
+    distribution: log_uniform_values
     max: 10
-    min: 1
+    min: 0.1
   entropy_coef:
     distribution: log_uniform_values
     max: 0.1
@@ -38,7 +51,6 @@ parameters:
       - false
   policy_activation:
     values:
-      - Tanh
       - ELU
   reward_scaling_pathwise:
     values:
@@ -46,6 +58,10 @@ parameters:
   use_straight_through:
     values:
       - true
+  normalize_by_mean_demand:
+    values:
+      - true
+      - false
   use_wandb:
     values:
       - true

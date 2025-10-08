@@ -191,7 +191,7 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     # Create datasets based on split type
     if sample_data_params['split_by_period']:
         scenario = Scenario(
-            periods=None,
+            periods=params_by_dataset['train']['periods'],
             problem_params=problem_params,
             store_params=store_params,
             warehouse_params=warehouse_params,
