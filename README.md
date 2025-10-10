@@ -1,22 +1,17 @@
-# Neural Inventory Control
-Implementation of Hindsight Differentiable Policy Optimization, as described in the paper [Neural Inventory Control in Networks via Hindsight Differentiable Policy Optimization](https://arxiv.org/abs/2306.11246).
+# Hybrid Policy Optimization for Discontinuous MDPs
+
+Implementation of hybrid methods combining differentiable simulation with model-free reinforcement learning (e.g., PPO) for solving Markov Decision Processes (MDPs) with discontinuities.
 
 ## Introduction
 
-Inventory management offers unique opportunities for reliably evaluating and applying deep reinforcement learning (DRL). We introduce Hindsight Differentiable Policy Optimization (HDPO), facilitating direct optimization of a DRL policy's hindsight performance using stochastic gradient descent. HDPO leverages two key elements: (i) an ability to backtest any policy's performance on a sample of historical scenarios, and (ii) the differentiability of the total cost incurred in a given scenario. We assess this approach in four problem classes where we can benchmark performance against the true optimum. HDPO algorithms consistently achieve near-optimal performance across all these classes, even when dealing with up to 60-dimensional raw state vectors. Moreover, we propose a natural neural network architecture to address problems with weak (or aggregate) coupling constraints between locations in an inventory network. This architecture utilizes weight duplication for "sibling" locations and state summarization. We demonstrate empirically that this design significantly enhances sample efficiency and provide justification for it through an asymptotic performance guarantee. Lastly, we assess HDPO in a setting that incorporates real sales data from a retailer, demonstrating its superiority over generalized newsvendor strategies.
+Many real-world sequential decision problems involve **discontinuities** in cost functions or transitions (e.g., fixed costs, minimum order quantities, or bulk discounts). Standard **pathwise gradient** methods fail in these settings, while purely **model-free** methods suffer from high variance.
 
-## Citation
+This project implements **hybrid approaches** that combine low-variance pathwise gradients with score-function ones. Our main contribution is to develop a hybrid algorithm that combines PPO with HDPO (which uses pathwise gradients.)
 
-You can cite our work using the following bibtex entry:
-
-```
-@article{alvo2023neural,
-  title={Neural inventory control in networks via hindsight differentiable policy optimization},
-  author={Alvo, Matias and Russo, Daniel and Kanoria, Yash},
-  journal={arXiv preprint arXiv:2306.11246},
-  year={2023}
-}
-```
+We explore several agent architectures including:
+- **HybridAgent**: Agent that combines PPO with HDPO (pathwise gradients)
+- **GumbelSoftmaxAgent**: Uses the straight-through trick and adds Gumbel noise, allowing to use pathwise gradients only  
+- **FactoredGaussianPPOAgent**: Pure PPO approach with Gaussian continuous actions 
 
 
 ## Installation
@@ -26,12 +21,12 @@ To set up the environment for this project, follow these steps:
 1. Clone this repository to your local machine:
 
 ```
-git clone git@github.com:MatiasAlvo/Neural_inventory_control.git
+git clone git@github.com:MatiasAlvo/hybrid-rl.git
 ```
 
 2. Navigate to the project directory:
 ```
-cd Neural_inventory_control
+cd hybrid-rl
 ```
 
 3. Create a conda environment using the provided environment.yml file
@@ -41,37 +36,29 @@ conda env create -f environment.yml
 
 4. Activate the conda environment:
 ```
-conda activate neural_inventory_control
+conda activate exp_neural
 ```
 
-5. Install torch with pip:
-```
-pip install torch
-```
+**Note**: The environment.yml includes PyTorch with CUDA 11.8 support. If you need CUDA 12.1 or CPU-only PyTorch, modify the `pytorch-cuda=11.8` line in environment.yml before creating the environment.
 
-## Usage
+## Project Structure
 
-The main functionalities for the code are in the following scripts:
-
-1. `data_handling.py`: Defines how to create a Scenarios class (which is actually a collection of scenarios). This includes sampling parameters (such as demand or costs when they are obtained by sampling), and sampling the demand traces. It also defines the Dataset class.
-
-2. `environment.py`: Defines the functionalities of the environment (simulator).
-
-3. `main_run.py`: Runs HDPO. We also provide a Jupyter notebook for the same purpose (`main_run.ipynb`).
-
-4. `neural_networks.py`: Defines the neural network functionalities.
-
-5. `trainer.py`: Defines the Trainer class, which is in charge of the training itself, including handling the interactions with the simulator and updating the neural network's weights.
-
-Parameters for settings/instances and policies are to be defined in a config file under the **config_files/settings** and **config_files/policies_and_hyperparams**, respectively. Instructions on how to do this are detailed in a later section. 
+- `src/algorithms/hybrid/agents/hybrid_agent.py`: Implementation of various agent architectures, including our proposed Hybrid agent, the FactoredGaussianPPO and GumbelSoftmax agents
+- `src/algorithms/hybrid/optimizer_wrapper/hybrid_wrapper.py`: Optimizer wrapper that allows to train using PPO and HDPO loss components for hybrid training
+- `src/features/feature_registry.py`: Feature processing and normalization system for handling hybrid action spaces
+- `src/training/trainer.py`: Main training loop orchestrating agent training with logging and model checkpointing
+- `src/envs/inventory/hybrid_simulator.py`: Implementation of the hybrid simulator supporting discontinuous cost functions and transitions
+- `src/algorithms/common/policies/`: Policy network architectures for different agent types
+- `src/environments/`: MDP environments with discontinuities
+- `config_files/`: Experiment configurations
 
 The code can be executed from the terminal by running the following:
 ```
 python3 main_run.py [mode] [config_file_path] [hyperparameters_file_path]
 ```
-Here, `[mode]` can be either `train` or `test`. If `train` is specified, the model is executed on the test set after training. The last two parameters define the filenames for the configuration files for the environment and hyperparameters, respectively. For example, if you want to train (and then test) a model for the setting defined in `one_store_lost`, considering the hyperparameters (including neural network architecture) defined in the file `vanilla_one_store`, you should run:
+Here, `[mode]` can be either `train` or `test`. If `train` is specified, the model is executed on the test set after training. The last two parameters define the filenames for the configuration files for the environment and hyperparameters, respectively. For example, if you want to train (and then test) a model for the setting defined in `fixed_costs`, considering the hyperparameters (including neural network architecture) defined in the file `hybrid`, you should run:
 ```
-python3 main_run.py train one_store_lost vanilla_one_store
+python3 main_run.py train fixed_costs hybrid
 ```
 
 We allow for providing the filenames for the setting and hyperparameter config files in `main_run.py`, in which case the last 2 parameters have to be omitted in the terminal. For example, you can run:
@@ -80,42 +67,6 @@ python3 main_run.py train
 ```
 and specify the filenames within the main script.
 
-## Settings and policy classes
-
-We provide config files for all the settings and all the policies described in our paper. For detailed descriptions of the settings and neural network architectures that we consider, as well as which policy classes/architectures are considered for each setting, please refer to our [paper](https://arxiv.org/abs/2306.11246).
-
-The settings considered are the following:
-
-- `one_store_backlogged`: One store under a backlogged demand assumption.
-- `one_store_lost`: One store under a lost demand assumption.
-- `one_store_real_data_lost_demand`: One store under a lost demand assumption, but considering demand traces built using sales data from a real retailer.
-- `one_store_real_data_read_file_example`: Same as the previous one, but in which all problem primitives (lead times, underage costs and holding costs) are read from files. We provide this example for instructional purposes.
-- `one_warehouse_lost_demand`: One warehouse and many stores, under a lost demand assumption.
-- `serial_system`: Serial system, in which inventory flows linearly from upstream towards downstream locations. Considers a backlogged demand assumption
-- `transshipment_backlogged`: One transshipment center (i.e., a warehouse that cannot hold inventory) and many stores, under a backlogged demand assumption.
-
-The policy classes we consider are the following:
-- `base_stock`: Base stock policy (optimal for the setting of one store under a backlogged demand assumption).
-- `capped_base_stock`: Capped base stock policy (well-performing for the setting of one store under a lost demand assumption).
-- `data_driven_net`: Defines a direct mapping from time-series data (previous demands, orders and arrivals) and current inventory on-hand to an order amount. In our paper, we refer to it as HDPO (end-to-end) in the section "HDPO with real time series data". This policy class can be modified to utilize a different set of features.
-- `echelon_stock`: Echelon stock policy (optimal for a serial system under a backlogged demand assumption).
-- `fixed_quantile`: Generalized newsvendor policy, that utilizes the same quantile for each scenario.
-- `just_in_time`: Non-admissible oracle policy, that looks into the future and orders to precisely meet future demand.
-- `quantile_nv`: Generalized newsvendor policy, that utilizes the newsvendor quantile (p/[p+h]).
-- `returns_nv`: Generalized newsvendor policy, that utilizes the newsvendor quantile (p/[p+h]), but allows for negative orders. It defines a non-admissible policy.
-- `symmetry_aware`: Symmetry-aware neural network for settings with one warehouse and many stores.
-- `transformed_nv`: Generalized newsvendor policy, that considers a flexible mapping from newsvendor quantile (p/[p+h]) to a new quantile. This quantile is therefore different across scenarios, but fixed across time for each scenario.
-- `vanilla_one_store`: Vanilla neural network for settings with one store and no warehouse.
-- `vanilla_one_warehouse`: Vanilla neural network for settings with one warehouse and many stores.
-- `vanilla_serial`: Vanilla neural network for the serial system setting.
-- `vanilla_transshipment`: Vanilla neural network for the setting with one transshipment center and many stores.
-
-To create a new policy class, follow these steps:
-
-1. Open the `neural_networks.py` file.
-2. Inside `neural_networks.py`, create a new class that inherits from `MyNeuralNetwork`. Define the `forward` method within this class to specify the forward pass of your neural network architecture.
-3. In the `get_architecture` method of the `NeuralNetworkCreator` class (located in neural_networks.py), add your newly created neural network to the dictionary of architectures.
-4. Finally, create a config file for your policy class under `config/files/policies_and_hyperparams`. This config should define the necessary parameters to instantiate your policy, as well as other parameters (to be defined below).
 
 ## Populating a config file
 
@@ -226,7 +177,7 @@ are generated by copying all values (costs and lead times), and splitting demand
 
 MIT License
 
-Copyright 2024 Matias Alvo, Daniel Russo, Yashodhan Kanoria
+Copyright 2025 Matias Alvo
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

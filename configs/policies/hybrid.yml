@@ -72,7 +72,7 @@ nn_params:
     continuous_shift: 5.0
     # continuous_scale: 100.0
     observation_keys: ['store_inventories', 'holding_costs', 'underage_costs', 'lead_times', 'procurement_costs', 'past_demands', 'days_from_christmas']
-    normalize_by_mean_demand: false  # Normalize quantity-related inputs by mean demand
+    normalize_by_mean_demand: true  # Normalize quantity-related inputs by mean demand
     # scale_by_mean_demand: false  # NEW PARAMETER
     heads:
       discrete:

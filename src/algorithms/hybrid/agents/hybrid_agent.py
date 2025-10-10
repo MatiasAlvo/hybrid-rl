@@ -350,35 +350,6 @@ class HybridAgent(BaseAgent):
             'vectorized_observation': processed_obs
         }
     
-    def forward_old(self, observation, train=True):
-        """Forward pass through the agent"""
-        # Flatten inputs using feature registry
-        processed_obs = self.feature_registry.flatten_inputs(observation)
-        
-        # Get raw outputs from policy
-        raw_outputs = self.policy(processed_obs, process_state=False)
-        
-        # Debug raw outputs
-        if isinstance(raw_outputs, dict) and 'discrete' in raw_outputs:
-            discrete_logits = raw_outputs['discrete']
-            if torch.isnan(discrete_logits).any() or torch.isinf(discrete_logits).any():
-                print("Warning: NaN or Inf in discrete logits from policy")
-                print("Discrete logits stats:", 
-                      f"range [{discrete_logits.min().item():.3f}, {discrete_logits.max().item():.3f}], "
-                      f"mean {discrete_logits.mean().item():.3f}")
-        
-        # Process network output
-        action_dict = self.feature_registry.process_network_output(raw_outputs, argmax=False, sample=True, observations=observation)
-        # Get value if value network exists
-        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
-
-        return {
-            'action_dict': action_dict,
-            'value': value,
-            'raw_outputs': raw_outputs,
-            'vectorized_observation': processed_obs
-        }
-
     def get_entropy(self, logits):
         distribution = torch.distributions.Categorical(logits=logits)
         return distribution.entropy()
@@ -398,42 +369,6 @@ class HybridAgent(BaseAgent):
         
         return log_probs, value, entropy
     
-    def get_log_probs_value_and_entropy_old(self, processed_observation, discrete_action_indices, continuous_samples=None):
-        """
-        Get logits, value, and entropy for PPO
-        
-        Args:
-            processed_observation: Processed observation tensor
-            discrete_action_indices: Indices of discrete actions taken during sampling
-            continuous_samples: Continuous action samples (ignored in base HybridAgent)
-            
-        Returns:
-            logits: Log probabilities of the discrete actions
-            value: Value from the value network
-            entropy: Entropy of the policy
-        """
-        # Get policy outputs
-        raw_outputs = self.policy(processed_observation, process_state=False)
-        
-        # Need to reshape actions to match the logits dimension
-        actions = discrete_action_indices.view(-1, 1, 1).expand(-1, raw_outputs['discrete'].size(1), 1)
-        
-        # Gather logits for the specific actions that were taken
-        logits = raw_outputs['discrete'].gather(-1, actions).squeeze(-1)
-        
-        value = self.value_net(processed_observation.detach(), process_state=False) if self.value_net else None
-        entropy = self.get_entropy(raw_outputs['discrete'])
-        
-        return logits, value, entropy
-
-    # def _get_required_losses(self):
-    #     """HybridAgent needs all loss components."""
-    #     return {
-    #         'policy_gradient': False,   # For discrete actions
-    #         'value': False,             # For PPO advantage estimation
-    #         'pathwise': True,          # For continuous actions
-    #         'entropy': False            # For exploration
-        # }
     def _get_required_losses(self):
         """HybridAgent needs all loss components."""
         return {
@@ -720,72 +655,6 @@ class FactoredGumbelSoftmaxAgent(GumbelSoftmaxAgent):
             'vectorized_observation': processed_obs if process_state else None
         }   
 
-    def forward_old(self, observation, train=True, process_state=True):
-        """Forward pass: evaluate continuous network for all possible discrete actions"""
-        processed_obs = self.policy.flatten_inputs(observation)            
-        # Get discrete logits
-        discrete_logits = self.policy.get_discrete_output(processed_obs)
-
-        processed_obs = torch.concat([processed_obs, discrete_logits.squeeze(1)], dim=-1)
-        
-        # Save pre-temperature logits
-        raw_outputs = {'pre_temp_discrete_logits': discrete_logits.detach().clone()}
-        
-        # Apply Gumbel-Softmax during training
-        if train and self.add_gumbel_noise:
-            # Sample from Gumbel(0, 1)
-            uniform_samples = torch.rand_like(discrete_logits)
-            gumbel_samples = -torch.log(-torch.log(uniform_samples + 1e-10) + 1e-10)
-            # Add Gumbel noise to logits
-            noisy_logits = discrete_logits + gumbel_samples
-        else:
-            noisy_logits = discrete_logits
-        
-        # Apply temperature scaling
-        scaled_logits = noisy_logits / self.temperature
-        raw_outputs['discrete'] = scaled_logits
-        
-        # Create one-hot encodings for all possible discrete actions
-        batch_size = processed_obs.size(0)
-        n_discrete = discrete_logits.size(-1)
-        
-        # Expand observation to evaluate with each possible discrete action
-        # [batch, features] -> [batch, n_discrete, features]
-        expanded_obs = processed_obs.unsqueeze(1).expand(-1, n_discrete, -1)
-        
-        # Create one-hot encodings for all discrete actions
-        one_hot = torch.eye(n_discrete, device=self.device)
-        # Expand one-hot to match batch size
-        # [n_discrete, n_discrete] -> [batch, n_discrete, n_discrete]
-        one_hot = one_hot.unsqueeze(0).expand(batch_size, -1, -1)
-        
-        # Get continuous outputs for all discrete actions
-        # Pass both expanded_obs and one_hot directly to get_continuous_output
-        continuous_outputs = self.policy.get_continuous_output(expanded_obs, one_hot)
-        continuous_outputs = continuous_outputs.squeeze(-1)
-
-        # Store continuous outputs
-        raw_outputs['continuous'] = continuous_outputs
-        
-        # Process network output
-        action_dict = self.feature_registry.process_network_output(
-            raw_outputs,
-            argmax=not train,
-            sample=False,
-            straight_through=self.use_straight_through and train,
-            observations=observation
-        )
-        
-        # Get value if value network exists
-        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
-        
-        return {
-            'action_dict': action_dict,
-            'value': value,
-            'raw_outputs': raw_outputs,
-            'vectorized_observation': processed_obs if process_state else None
-        }   
-  
 class ContinuousOnlyAgent(BaseAgent):
     """
     Approach 2: Only using continuous actions, and approximating discontinuities 
@@ -1278,84 +1147,3 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         total_entropy = discrete_entropy + continuous_entropy
         
         return total_log_probs, value, total_entropy
-
-    def get_log_probs_value_and_entropy_old(self, processed_observation, discrete_action_indices, continuous_samples=None):
-        raise NotImplementedError("check that normalization of the logits is correct")
-        """
-        Calculate log probabilities, value estimates, and entropy for PPO updates
-        
-        Args:
-            processed_observation: Processed observation tensor
-            discrete_action_indices: Indices of discrete actions taken during sampling
-            continuous_samples: Continuous action samples (used for calculating log probabilities)
-                Shape: [batch, 1, n_features]
-            
-        Returns:
-            total_logits: Combined log probabilities of discrete and continuous actions
-            value: Value estimate
-            total_entropy: Total entropy
-        """
-        # Step 1: Get discrete logits from policy
-        discrete_logits = self.policy.get_discrete_output(processed_observation)
-        
-        # Step 2: Calculate discrete log probabilities
-        # Apply softmax to get probabilities, then take log
-        # discrete_log_probs = F.log_softmax(discrete_logits, dim=-1)
-        discrete_log_probs = discrete_logits.gather(-1, discrete_action_indices).squeeze(-1)
-        
-        # Step 3: Get log probs for selected discrete actions
-        # Reshape action indices to [batch, 1, 1] to match gather dimension
-        discrete_action_reshaped = discrete_action_indices.view(-1, 1, 1)
-        selected_discrete_log_probs = discrete_log_probs.gather(-1, discrete_action_reshaped).squeeze(-1).squeeze(1)
-        
-        # Step 4: Create one-hot encoding for selected discrete actions
-        discrete_one_hot = torch.zeros_like(discrete_logits)
-        discrete_one_hot.scatter_(-1, discrete_action_reshaped, 1)
-        
-        # Step 5: Get continuous mean conditioned on the discrete action
-        # Squeeze out the middle dimension to match expected input shape
-        selected_continuous_mean = self.policy.get_continuous_output(
-            processed_observation, 
-            discrete_one_hot.squeeze(1),
-            include_std=not self.fixed_std
-        )
-        
-        # Step 6: Calculate log probabilities for continuous actions if provided
-        total_logits = selected_discrete_log_probs  # Start with discrete log probs
-        
-        if continuous_samples is not None:
-            # Get standard deviation from our scalar parameter
-            continuous_log_std = self.log_std.expand_as(selected_continuous_mean)
-            continuous_std = torch.exp(continuous_log_std)
-            
-            # Create normal distribution
-            normal_dist = torch.distributions.Normal(selected_continuous_mean.squeeze(1), continuous_std.squeeze(1))
-            
-            # Simplify by using squeeze directly on continuous_samples
-            # This assumes continuous_samples has shape [batch, 1, n_features]
-            # After squeeze(1), it becomes [batch, n_features] which matches selected_continuous_mean
-            selected_continuous_samples = continuous_samples.gather(-1, discrete_action_reshaped).squeeze(-1).squeeze(1)
-            
-            # Calculate log probabilities for the samples
-            continuous_log_probs = normal_dist.log_prob(selected_continuous_samples)
-            
-            # Add continuous log probs to total
-            total_logits = total_logits + continuous_log_probs
-        
-        # Step 7: Calculate value estimate
-        value = self.value_net(processed_observation, process_state=False) if self.value_net else None
-        
-        # Step 8: Calculate entropy
-        # For discrete part - need to remove extra dimension for entropy calculation
-        discrete_entropy = torch.distributions.Categorical(logits=discrete_logits.squeeze(1)).entropy()
-        
-        # For continuous part
-        continuous_entropy = torch.distributions.Normal(
-            selected_continuous_mean, continuous_std
-        ).entropy().sum(dim=-1)
-        
-        # Total entropy
-        total_entropy = discrete_entropy + continuous_entropy
-        
-        return total_logits, value, total_entropy
-
