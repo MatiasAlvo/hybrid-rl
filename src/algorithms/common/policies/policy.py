@@ -790,20 +790,46 @@ class FactoredPolicy(PolicyNetwork):
         features = self.discrete_net(x)
         return self.discrete_head(features).unsqueeze(1)
     
-    def get_continuous_output(self, x, discrete_one_hot):
+    def get_continuous_output(self, x, discrete_one_hot, include_std=False):
         """
-        Get continuous mean conditioned on state and discrete action
+        Get continuous mean (and optionally log_std) conditioned on state and discrete action
         
         Args:
             x: State tensor [batch, n_discrete, features] or [batch, features]
             discrete_one_hot: One-hot encoded discrete action [batch, n_discrete, n_discrete] or [batch, n_discrete]
+            include_std: If True, output includes both mean and log_std. If False, only mean.
         """
         # Concatenate along the last dimension, regardless of number of dimensions
         combined_input = torch.cat([x, discrete_one_hot], dim=-1)
         
         # Get features and then output
         features = self.continuous_net(combined_input)
-        return self.continuous_head(features).unsqueeze(1)*self.continuous_scale + self.continuous_shift
+        out = self.continuous_head(features)
+        
+        if include_std:
+            # Output includes both mean and log_std
+            n_continuous = out.size(-1) // 2
+            mean_part = out[..., :n_continuous]
+            log_std_part = out[..., n_continuous:]
+            
+            # Apply scale/shift to mean part
+            mean_transformed = mean_part * self.continuous_scale + self.continuous_shift
+            
+            # Apply transformation to log_std part: subtract 1 to initialize log_std to -1
+            log_std_transformed = log_std_part - 1
+            
+            # Print warning on first call
+            if not hasattr(self, '_std_warning_printed'):
+                print("WARNING: Applying transformations to continuous output - scale/shift to first half, subtract 1 to second half")
+                self._std_warning_printed = True
+            
+            # Concatenate mean and log_std
+            out_transformed = torch.cat([mean_transformed, log_std_transformed], dim=-1)
+        else:
+            # Only mean output, apply scale/shift to all features
+            out_transformed = out * self.continuous_scale + self.continuous_shift
+        
+        return out_transformed.unsqueeze(1)
     
     def forward(self, x, process_state=True):
         """

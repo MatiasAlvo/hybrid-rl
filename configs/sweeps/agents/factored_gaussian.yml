@@ -42,6 +42,10 @@ parameters:
   normalize_observations:
     values:
       - false
+  entropy_coef:
+    distribution: log_uniform_values
+    max: 0.2
+    min: 0.005
   num_epochs:
     values:
       - 5

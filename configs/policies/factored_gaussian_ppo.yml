@@ -59,7 +59,7 @@ nn_params:
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0
-    continuous_shift: 1.0  # Match hybrid policy
+    continuous_shift: 1.0  # Remember to change to 1.0 afterwards
     # Updated observation keys to match hybrid policy
     observation_keys: ['store_inventories', 'holding_costs', 'underage_costs', 'lead_times', 'procurement_costs', 'past_demands', 'days_from_christmas']
     normalize_by_mean_demand: true  # Normalize quantity-related inputs by mean demand

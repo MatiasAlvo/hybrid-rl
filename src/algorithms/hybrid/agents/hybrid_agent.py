@@ -970,6 +970,9 @@ class GaussianPPOAgent(HybridAgent):
     
     def get_gaussian_entropy(self, log_std):
         """Get entropy of a Gaussian distribution
+        This gradient is slightly biased when log_std is a vector, since we don't consider the cross-term coming from
+        log-prob of discrete actions and the entropy of the continuous actions. Still, it is a good approximation
+        that aids in exploration.
         
         Args:
             log_std: Log standard deviation. Can be scalar or vector.
@@ -1128,7 +1131,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         discrete_one_hot = torch.zeros_like(discrete_logits).scatter_(-1, discrete_action_reshaped, 1)
         
         # Get continuous output (conditioned on sampled discrete action)
-        continuous_output = self.policy.get_continuous_output(processed_obs, discrete_one_hot.squeeze(1))
+        continuous_output = self.policy.get_continuous_output(processed_obs, discrete_one_hot.squeeze(1), include_std=not self.fixed_std)
         
         if self.fixed_std:
             # Fixed std: continuous_output is just the mean
@@ -1239,7 +1242,8 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         # Get continuous output conditioned on the discrete action
         continuous_output = self.policy.get_continuous_output(
             processed_observation, 
-            discrete_one_hot.squeeze(1)
+            discrete_one_hot.squeeze(1),
+            include_std=not self.fixed_std
         )
         
         if self.fixed_std:
@@ -1312,7 +1316,8 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
         # Squeeze out the middle dimension to match expected input shape
         selected_continuous_mean = self.policy.get_continuous_output(
             processed_observation, 
-            discrete_one_hot.squeeze(1)
+            discrete_one_hot.squeeze(1),
+            include_std=not self.fixed_std
         )
         
         # Step 6: Calculate log probabilities for continuous actions if provided
