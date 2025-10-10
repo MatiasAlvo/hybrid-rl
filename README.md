@@ -1,4 +1,4 @@
-# Hybrid Policy Optimization for Discontinuous MDPs
+# Hybrid Policy Optimization in Discontinuous MDPs: Combining Pathwise and Model-Free Gradient Estimators
 
 Implementation of hybrid methods combining differentiable simulation with model-free reinforcement learning (e.g., PPO) for solving Markov Decision Processes (MDPs) with discontinuities.
 
