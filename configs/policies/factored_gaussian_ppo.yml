@@ -1,5 +1,5 @@
 trainer_params:
-  'epochs': 250
+  'epochs': 350
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -24,13 +24,19 @@ logging_params:
 
 agent_params:
   'agent_type': 'factored_gaussian_ppo'
-  'fixed_std': false  # Set to false for state-dependent standard deviation
+  'fixed_std': true  # Set to false for state-dependent standard deviation
 
 optimizer_params:
   # 'learning_rate': 0.015
   'learning_rate': 0.0002
   'anneal_lr': true
   'weight_decay': 0.0
+  'lr_multipliers':
+    'value': 1.0
+    'backbone': 1.0
+    'continuous': 1.0
+    'discrete': 1.0
+    'other': 1.0
   'ppo_params':
     'clip_coef': 0.2
     'gamma': 0.95

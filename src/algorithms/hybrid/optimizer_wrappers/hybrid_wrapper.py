@@ -288,6 +288,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             approx_kl = None
             
             # minibatch loop
+            minibatch_idx = 0
             for start in range(0, batch_size, current_minibatch_size):
                 end = start + current_minibatch_size
                 mb_inds = b_inds[start:end]
@@ -368,11 +369,14 @@ class HybridWrapper(BaseOptimizerWrapper):
                 clipfracs.append(clipfrac)
                 approx_kls.append(approx_kl.item())
                 
+                # Increment minibatch counter
+                minibatch_idx += 1
+                
                 # Check for early stopping criteria
                 # if the approx KL divergence is greater than the target KL threshold, stop training
                 if processed_data['target_kl'] is not None and approx_kl > processed_data['target_kl']:
                     early_stop_epoch = epoch
-                    early_stop_batch = (batch_size // current_minibatch_size) - 1  # Last batch of the epoch
+                    early_stop_batch = minibatch_idx - 1  # Index of the batch that triggered early stop (0-indexed)
                     break  # Break out of minibatch loop
             
             # Break out of epoch loop if we hit KL divergence limit
@@ -384,7 +388,23 @@ class HybridWrapper(BaseOptimizerWrapper):
             explained_var = self._compute_explained_variance(tensors)
         
         # Compute number of updates for averaging
-        num_updates = (early_stop_epoch * (batch_size // (batch_size // self.ppo_params.get('num_minibatches', 4) if early_stop_epoch > 0 else batch_size))) + 1
+        # Epoch 0 always has 1 update (full batch), subsequent epochs have num_minibatches updates
+        num_minibatches = self.ppo_params.get('num_minibatches', 4)
+        
+        if early_stop_batch is not None:
+            # Early stopping occurred - count all completed epochs plus partial minibatches
+            # Epoch 0 has 1 update
+            num_updates = 1
+            # Add updates from epochs 1 to early_stop_epoch-1 (if any)
+            if early_stop_epoch > 1:
+                num_updates += (early_stop_epoch - 1) * num_minibatches
+            # Add updates from the early_stop_epoch (minibatches 0 to early_stop_batch inclusive)
+            if early_stop_epoch > 0:
+                num_updates += early_stop_batch + 1
+        else:
+            # No early stopping - completed all epochs
+            # Epoch 0 has 1 update, epochs 1 to num_ppo_epochs-1 have num_minibatches each
+            num_updates = 1 + (num_ppo_epochs - 1) * num_minibatches
         
         # Compile metrics
         metrics = {

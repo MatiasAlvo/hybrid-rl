@@ -122,13 +122,15 @@ class Trainer():
                 # Generate and log plots for dev set with dev loss (if enabled in config)
                 if 'trajectory_data' in dev_metrics:
                     logging_params = config.hyperparams_config.get('logging_params', {})
+                    normalize_by_mean = logging_params.get('normalize_plots_by_mean_demand', False)
                     
                     # Generate and log inventory vs action plot for dev set with dev loss
                     if logging_params.get('log_inventory_action_plot', False):
                         self.log_inventory_action_plot(
                             dev_metrics['trajectory_data'], 
                             epoch, 
-                            dev_loss=dev_metrics['loss/reported']
+                            dev_loss=dev_metrics['loss/reported'],
+                            normalize_by_mean_demand=normalize_by_mean
                         )
                     
                     # Generate and log inventory vs value plot for dev set with dev loss
@@ -136,7 +138,8 @@ class Trainer():
                         self.log_inventory_value_plot(
                             dev_metrics['trajectory_data'], 
                             epoch, 
-                            dev_loss=dev_metrics['loss/reported']
+                            dev_loss=dev_metrics['loss/reported'],
+                            normalize_by_mean_demand=normalize_by_mean
                         )
                     
                     # Generate and log inventory vs discrete action 0 probability plot for dev set with dev loss
@@ -144,7 +147,8 @@ class Trainer():
                         self.log_inventory_discrete_action0_prob_plot(
                             dev_metrics['trajectory_data'], 
                             epoch, 
-                            dev_loss=dev_metrics['loss/reported']
+                            dev_loss=dev_metrics['loss/reported'],
+                            normalize_by_mean_demand=normalize_by_mean
                         )
                 
                 self.logger.flush_metrics()
@@ -280,20 +284,20 @@ class Trainer():
                 
                 # Handle special metrics (like histograms) that shouldn't be averaged
                 for k, v in batch_metrics.items():
-                    if 'histogram' in k or isinstance(v, wandb.Histogram):
+                    if 'histogram' in k:
                         special_metrics[k] = v  # Store without averaging
                         continue
                         
                     if optimizer_metrics_sum is None:
                         optimizer_metrics_sum = {k: v for k, v in batch_metrics.items() 
-                                               if 'histogram' not in k and not isinstance(v, wandb.Histogram)}
+                                               if 'histogram' not in k}
                     else:
                         for k, v in batch_metrics.items():
-                            if 'histogram' not in k and not isinstance(v, wandb.Histogram):
+                            if 'histogram' not in k:
                                 optimizer_metrics_sum[k] += v
                     num_batches += 1
             
-            # Store trajectory data for the first batch only
+            # Store trajectory data from the first batch only (simplified for now)
             if return_trajectory and trajectory_data is None:
                 trajectory_data = batch_trajectory_data
                 
@@ -326,7 +330,8 @@ class Trainer():
                 try:
                     all_data = torch.cat(action_histograms[key], dim=0)
                     # Create wandb histogram
-                    metrics[f'action_distribution/{key}'] = wandb.Histogram(all_data.flatten().cpu().numpy())
+                    # Skip wandb histogram for now since wandb is disabled
+                    # metrics[f'action_distribution/{key}'] = wandb.Histogram(all_data.flatten().cpu().numpy())
                 except Exception as e:
                     print(f"Error creating histogram for {key}: {e}")
         
@@ -407,7 +412,7 @@ class Trainer():
 
             # Collect trajectory data if requested
             if collect_trajectories:
-                self._collect_trajectory_data(trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs)
+                self._collect_trajectory_data(trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs, observation=observation)  # Pass observation
 
             # Update running rewards
             batch_reward += total_reward
@@ -463,14 +468,16 @@ class Trainer():
             return None
         
         return {
-            'observations': [],      # observations at each time step
-            'rewards': [],           # rewards at each time step
-            'discrete_action_indices': [],  # one action per sub-range
-            'discrete_logits': [],    # discrete action probabilities
-            'total_action': [],      # total one-dimensional action
-            'log_probs': [],            # log_probs for the selected sub-range
-            'values': [],            # value of the state
-            'terminated': []         # termination flags
+            'observations': [],  # Keep this for backward compatibility
+            'store_inventories': [],  # NEW: Store raw inventory data
+            'discrete_action_indices': [],
+            'discrete_logits': [],
+            'total_action': [],
+            'values': [],
+            'rewards': [],
+            'terminated': [],
+            'raw_continuous_samples': [],
+            'past_demands': []
         }
 
     def _initialize_additional_data(self, collect_additional_data):
@@ -507,10 +514,18 @@ class Trainer():
         """Apply discrete allocation by rounding action values"""
         return {key: val.round() for key, val in action_dict.items()}
 
-    def _collect_trajectory_data(self, trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs=None):
+    def _collect_trajectory_data(self, trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs=None, observation=None):
         """Collect trajectory data for the current step"""
         if vectorized_obs is not None:
             trajectory_data['observations'].append(vectorized_obs.clone())
+        
+        # NEW: Store raw, unnormalized inventory data
+        if observation is not None and 'store_inventories' in observation:
+            trajectory_data['store_inventories'].append(observation['store_inventories'].clone())
+        
+        # NEW: Collect past_demands for normalization
+        if observation is not None and 'past_demands' in observation:
+            trajectory_data['past_demands'].append(observation['past_demands'].clone())
         
         # Only append fields that exist and are not None
         if 'discrete_action_indices' in action_dict and action_dict['discrete_action_indices'] is not None:
@@ -833,7 +848,7 @@ class Trainer():
         df.to_csv(csv_path, index=False)
         print(f"Saved test data to {csv_path}")
 
-    def log_inventory_action_plot(self, trajectory_data, epoch, dev_loss=None):
+    def log_inventory_action_plot(self, trajectory_data, epoch, dev_loss=None, normalize_by_mean_demand=False):
         """
         Generate and log a plot showing the relationship between inventory and actions to wandb.
         
@@ -841,121 +856,161 @@ class Trainer():
             trajectory_data: Dictionary containing trajectory information
             epoch: Current epoch number
             dev_loss: Optional dev loss to include in the title
+            normalize_by_mean_demand: Whether to normalize quantities by mean demand
         """
         try:
             # Skip if logger is not available
             if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
                 return
             
-            # Check if we have the necessary data
-            if "observations" not in trajectory_data or "total_action" not in trajectory_data:
+            # Check if we have the necessary data - use store_inventories instead of observations
+            if "store_inventories" not in trajectory_data or "total_action" not in trajectory_data:
                 print("Missing required data for inventory-action plot")
                 return
             
-            # Get shapes: [T, B, F] for observations, [T, B, 1] for actions
-            T, B, _ = trajectory_data["observations"].shape
+            # Handle both list and tensor cases for all trajectory data
+            if isinstance(trajectory_data["store_inventories"], list):
+                inventory_tensor = torch.stack(trajectory_data["store_inventories"], dim=0)
+            else:
+                inventory_tensor = trajectory_data["store_inventories"]
             
-            # Limit the number of samples to plot (reduced from 100 to 50)
+            if isinstance(trajectory_data["total_action"], list):
+                action_tensor = torch.stack(trajectory_data["total_action"], dim=0)
+            else:
+                action_tensor = trajectory_data["total_action"]
+            
+            # Handle different tensor shapes
+            if len(inventory_tensor.shape) >= 3:
+                if inventory_tensor.shape[2] > 1:
+                    raise NotImplementedError("Plot for multi-store is not implemented")
+                T, B = inventory_tensor.shape[0], inventory_tensor.shape[1]
+                # Sum across all remaining dimensions to get total inventory per sample
+                if len(inventory_tensor.shape) > 3:
+                    # Reshape to [T, B, -1] and sum across the last dimension
+                    inventory_tensor = inventory_tensor.reshape(T, B, -1).sum(dim=-1, keepdim=True)
+                n_stores = inventory_tensor.shape[2] if len(inventory_tensor.shape) > 2 else 1
+            else:
+                print(f"ERROR: Unexpected tensor shape: {inventory_tensor.shape}")
+                return
+            
+            # Limit the number of samples to plot
             n_samples = min(30, B)
             
-            # Select random batch indices first
+            # Select random batch indices
             random_batch_indices = torch.randperm(B)[:n_samples]
             
-            # Select the samples for each tensor
-            selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
-            selected_total_action = trajectory_data["total_action"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+            # Select the samples: [T, n_samples, n_stores] and [T, n_samples, 1]
+            selected_inventories = inventory_tensor[:, random_batch_indices, :]
+            selected_total_action = action_tensor[:, random_batch_indices, :]
             
             # Get discrete action indices if available
-            has_discrete_actions = "discrete_action_indices" in trajectory_data
+            has_discrete_actions = "discrete_action_indices" in trajectory_data and len(trajectory_data["discrete_action_indices"]) > 0
             if has_discrete_actions:
-                selected_discrete_actions = trajectory_data["discrete_action_indices"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
-                # Flatten and convert to numpy
+                if isinstance(trajectory_data["discrete_action_indices"], list):
+                    discrete_tensor = torch.stack(trajectory_data["discrete_action_indices"], dim=0)
+                else:
+                    discrete_tensor = trajectory_data["discrete_action_indices"]
+                selected_discrete_actions = discrete_tensor[:, random_batch_indices, :]
                 discrete_actions_flat = selected_discrete_actions.reshape(-1).detach().cpu().numpy()
             
-            # Flatten time and batch dimensions for plotting
-            # Reshape to [T*n_samples, F] and [T*n_samples, 1]
-            inventories_flat = selected_inventories.reshape(-1, selected_inventories.shape[-1]).detach().cpu()
+            # Flatten time and batch dimensions: [T*n_samples, n_stores]
+            inventories_flat = selected_inventories.reshape(-1, n_stores).detach().cpu()
             actions_flat = selected_total_action.reshape(-1, 1).detach().cpu()
             
-            # Calculate inventory sums (sum across feature dimension)
+            # Calculate inventory sums (sum across stores)
             inventory_sum = inventories_flat.sum(dim=1).numpy()
             total_action = actions_flat.squeeze().numpy()
             
-            # Create the plot with larger figure size
+            # Apply normalization if requested
+            if normalize_by_mean_demand and 'past_demands' in trajectory_data and len(trajectory_data['past_demands']) > 0:
+                # Handle both list and tensor cases for past_demands
+                if isinstance(trajectory_data['past_demands'], list):
+                    past_demands_tensor = torch.stack(trajectory_data['past_demands'], dim=0)
+                else:
+                    past_demands_tensor = trajectory_data['past_demands']
+                
+                # Select the same samples: [T, n_samples, n_stores, n_periods]
+                selected_past_demands = past_demands_tensor[:, random_batch_indices, :, :]
+                
+                # Compute mean demand per sample per timestep: [T, n_samples]
+                mean_demands = selected_past_demands.mean(dim=(2, 3))  # Mean across stores and periods
+                                
+                # Flatten: [T * n_samples]
+                mean_demands_flat = mean_demands.reshape(-1).cpu().numpy()
+                
+                # Normalize inventory and actions
+                inventory_sum = inventory_sum / (mean_demands_flat + 1e-8)
+                total_action = total_action / (mean_demands_flat + 1e-8)
+            
+            # Create the plot
             plt.figure(figsize=(16, 10))
             
             # Color points by discrete action if available
             if has_discrete_actions:
-                # Get unique discrete actions for coloring
                 unique_actions = np.unique(discrete_actions_flat)
                 
-                # Create a colormap with distinct colors - Fix deprecated get_cmap
                 if len(unique_actions) <= 10:
-                    # For few actions, use tab10 colormap - using the new recommended approach
                     cmap = plt.colormaps['tab10']
                 else:
-                    # For many actions, use hsv colormap - using the new recommended approach
                     cmap = plt.colormaps['hsv']
                 
-                # Plot each discrete action with a different color
                 for i, action in enumerate(unique_actions):
-                    # Fix boolean mask conversion warning by explicitly converting to integer indices
                     mask = np.where(discrete_actions_flat == action)[0]
                     plt.scatter(
                         inventory_sum[mask], 
                         total_action[mask], 
                         alpha=0.8, 
-                        s=30,  # Larger points for better visibility
-                        color=cmap(i % cmap.N),  # Use modulo to ensure we don't exceed colormap range
+                        s=30,
+                        color=cmap(i % cmap.N),
                         label=f'Action {int(action)}'
                     )
             else:
-                # If no discrete actions, use a single color
                 plt.scatter(inventory_sum, total_action, alpha=0.7, s=50)
             
-            # Add (s, S) policy line with thicker line
-            s, S = 26, 62  # Example values, adjust as needed
-            inventory_range = np.linspace(np.min(inventory_sum), np.max(inventory_sum), 100)
-            order_amounts = np.maximum(S - inventory_range, 0) * (inventory_range <= s)
-            plt.plot(inventory_range, order_amounts, color='black', linewidth=3, label='(s, S) Policy')
+            # Only add (s, S) policy line if NOT normalizing
+            if not normalize_by_mean_demand:
+                s, S = 26, 62  # Example values
+                inventory_range = np.linspace(np.min(inventory_sum), np.max(inventory_sum), 100)
+                order_amounts = np.maximum(S - inventory_range, 0) * (inventory_range <= s)
+                plt.plot(inventory_range, order_amounts, color='black', linewidth=3, label='(s, S) Policy')
             
-            # Add dev loss to title if provided
+            # Add title with normalization indicator
             title = f'Inventory vs Actions (Epoch {epoch})'
+            if normalize_by_mean_demand:
+                title += ' [Normalized by Mean Demand]'
             if dev_loss is not None:
                 title += f' - Dev Loss: {dev_loss:.4f}'
             
-            # Use larger font sizes for better readability
             plt.title(title, fontsize=18)
-            plt.xlabel('Total Inventory', fontsize=16)
-            plt.ylabel('Total Actions', fontsize=16)
+            xlabel = 'Total Inventory (Normalized)' if normalize_by_mean_demand else 'Total Inventory'
+            ylabel = 'Total Actions (Normalized)' if normalize_by_mean_demand else 'Total Actions'
+            plt.xlabel(xlabel, fontsize=16)
+            plt.ylabel(ylabel, fontsize=16)
             plt.xticks(fontsize=14)
             plt.yticks(fontsize=14)
             
-            # Add legend with reasonable size and position
-            if has_discrete_actions and len(unique_actions) <= 10:  # Only show legend if not too many actions
+            if has_discrete_actions and len(unique_actions) <= 10:
                 plt.legend(fontsize=12, loc='best', framealpha=0.7)
-            else:
+            elif not normalize_by_mean_demand:  # Only show legend for (s,S) if not normalized
                 plt.legend(fontsize=14)
             
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
             
-            # Convert plot to image with higher DPI for better quality
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=150)
             buf.seek(0)
             img = Image.open(buf)
             
-            # Log to wandb directly through current_metrics
             self.logger.current_metrics['inventory_action_plot'] = wandb.Image(img)
-            
-            # Close the plot to free memory
             plt.close()
             
         except Exception as e:
             print(f"Error generating inventory-action plot: {e}")
+            import traceback
+            traceback.print_exc()
 
-    def log_inventory_value_plot(self, trajectory_data, epoch, dev_loss=None):
+    def log_inventory_value_plot(self, trajectory_data, epoch, dev_loss=None, normalize_by_mean_demand=False):
         """
         Generate and log a plot showing the relationship between inventory and value agent outputs to wandb.
         
@@ -963,45 +1018,95 @@ class Trainer():
             trajectory_data: Dictionary containing trajectory information
             epoch: Current epoch number
             dev_loss: Optional dev loss to include in the title
+            normalize_by_mean_demand: Whether to normalize quantities by mean demand
         """
         try:
             # Skip if logger is not available
             if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
                 return
             
-            # Check if we have the necessary data
-            if "observations" not in trajectory_data or "values" not in trajectory_data:
+            # Check if we have the necessary data - use store_inventories instead of observations
+            if "store_inventories" not in trajectory_data or "values" not in trajectory_data:
                 print("Missing required data for inventory-value plot")
                 return
             
-            # Get shapes: [T, B, F] for observations, [T, B, 1] for values
-            T, B, _ = trajectory_data["observations"].shape
+            # Handle both list and tensor cases for all trajectory data
+            if isinstance(trajectory_data["store_inventories"], list):
+                inventory_tensor = torch.stack(trajectory_data["store_inventories"], dim=0)
+            else:
+                inventory_tensor = trajectory_data["store_inventories"]
+            
+            if isinstance(trajectory_data["values"], list):
+                value_tensor = torch.stack(trajectory_data["values"], dim=0)
+            else:
+                value_tensor = trajectory_data["values"]
+            
+            # Handle different tensor shapes
+            if len(inventory_tensor.shape) >= 3:
+                if inventory_tensor.shape[2] > 1:
+                    raise NotImplementedError("Plot for multi-store is not implemented")
+                T, B = inventory_tensor.shape[0], inventory_tensor.shape[1]
+                # Sum across all remaining dimensions to get total inventory per sample
+                if len(inventory_tensor.shape) > 3:
+                    # Reshape to [T, B, -1] and sum across the last dimension
+                    inventory_tensor = inventory_tensor.reshape(T, B, -1).sum(dim=-1, keepdim=True)
+                n_stores = inventory_tensor.shape[2] if len(inventory_tensor.shape) > 2 else 1
+            else:
+                print(f"ERROR: Unexpected tensor shape: {inventory_tensor.shape}")
+                return
             
             # Limit the number of samples to plot
             n_samples = min(30, B)
             
-            # Select random batch indices first
+            # Select random batch indices
             random_batch_indices = torch.randperm(B)[:n_samples]
             
-            # Select the samples for each tensor
-            selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
-            selected_values = trajectory_data["values"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+            # Select the samples: [T, n_samples, n_stores] and [T, n_samples, 1]
+            selected_inventories = inventory_tensor[:, random_batch_indices, :]
+            selected_values = value_tensor[:, random_batch_indices, :]
             
             # Get discrete action indices if available for coloring
             has_discrete_actions = "discrete_action_indices" in trajectory_data
             if has_discrete_actions:
-                selected_discrete_actions = trajectory_data["discrete_action_indices"][:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
+                if isinstance(trajectory_data["discrete_action_indices"], list):
+                    discrete_tensor = torch.stack(trajectory_data["discrete_action_indices"], dim=0)
+                else:
+                    discrete_tensor = trajectory_data["discrete_action_indices"]
+                selected_discrete_actions = discrete_tensor[:, random_batch_indices, :]  # Shape: [T, n_samples, 1]
                 # Flatten and convert to numpy
                 discrete_actions_flat = selected_discrete_actions.reshape(-1).detach().cpu().numpy()
             
-            # Flatten time and batch dimensions for plotting
-            # Reshape to [T*n_samples, F] and [T*n_samples, 1]
-            inventories_flat = selected_inventories.reshape(-1, selected_inventories.shape[-1]).detach().cpu()
+            # Flatten time and batch dimensions: [T*n_samples, n_stores]
+            inventories_flat = selected_inventories.reshape(-1, n_stores).detach().cpu()
             values_flat = selected_values.reshape(-1, 1).detach().cpu()
             
-            # Calculate inventory sums (sum across feature dimension)
+            # Calculate inventory sums (sum across stores)
             inventory_sum = inventories_flat.sum(dim=1).numpy()
             value_outputs = values_flat.squeeze().numpy()
+            
+            # Apply normalization if requested
+            if normalize_by_mean_demand and 'past_demands' in trajectory_data and len(trajectory_data['past_demands']) > 0:
+                # Handle both list and tensor cases for past_demands
+                if isinstance(trajectory_data['past_demands'], list):
+                    past_demands_tensor = torch.stack(trajectory_data['past_demands'], dim=0)
+                else:
+                    past_demands_tensor = trajectory_data['past_demands']
+                
+                # Select the same samples: [T, n_samples, n_stores, n_periods]
+                selected_past_demands = past_demands_tensor[:, random_batch_indices, :, :]
+                
+                # Compute mean demand per sample per timestep: [T, n_samples]
+                mean_demands = selected_past_demands.mean(dim=(2, 3))  # Mean across stores and periods
+                
+                # Clamp to stabilize (same as prepare_inputs logic)
+                mean_demands = torch.clamp(mean_demands, min=1.0, max=100.0)
+                
+                # Flatten: [T * n_samples]
+                mean_demands_flat = mean_demands.reshape(-1).cpu().numpy()
+                
+                # Normalize inventory and actions
+                inventory_sum = inventory_sum / (mean_demands_flat + 1e-8)
+                value_outputs = value_outputs / (mean_demands_flat + 1e-8)
             
             # Create the plot with larger figure size
             plt.figure(figsize=(16, 10))
@@ -1037,12 +1142,14 @@ class Trainer():
             
             # Add dev loss to title if provided
             title = f'Inventory vs Value Agent Outputs (Epoch {epoch})'
+            if normalize_by_mean_demand:
+                title += ' [Inventory Normalized by Mean Demand]'
             if dev_loss is not None:
                 title += f' - Dev Loss: {dev_loss:.4f}'
             
             # Use larger font sizes for better readability
             plt.title(title, fontsize=18)
-            plt.xlabel('Total Inventory', fontsize=16)
+            plt.xlabel('Total Inventory (Normalized)' if normalize_by_mean_demand else 'Total Inventory', fontsize=16)
             plt.ylabel('Value Agent Output', fontsize=16)
             plt.xticks(fontsize=14)
             plt.yticks(fontsize=14)
@@ -1069,91 +1176,128 @@ class Trainer():
         except Exception as e:
             print(f"Error generating inventory-value plot: {e}")
 
-    def log_inventory_discrete_action0_prob_plot(self, trajectory_data, epoch, dev_loss=None):
+    def log_inventory_discrete_action0_prob_plot(self, trajectory_data, epoch, dev_loss=None, normalize_by_mean_demand=False):
         """
-        Generate and log a plot showing the relationship between inventory and probability of discrete action 0 to wandb.
+        Generate and log a plot showing the relationship between inventory and probability of discrete action 0.
         
         Args:
             trajectory_data: Dictionary containing trajectory information
             epoch: Current epoch number
             dev_loss: Optional dev loss to include in the title
+            normalize_by_mean_demand: Whether to normalize quantities by mean demand
         """
         try:
-            # Skip if logger is not available
             if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
                 return
             
-            # Check if we have the necessary data
-            if ("observations" not in trajectory_data or 
+            # Check if we have the necessary data - use store_inventories instead of observations
+            if ("store_inventories" not in trajectory_data or 
                 "discrete_logits" not in trajectory_data or
-                trajectory_data["discrete_logits"] is None or
-                trajectory_data["observations"] is None):
+                len(trajectory_data["discrete_logits"]) == 0):
                 print("Missing required data for inventory-discrete action 0 probability plot")
                 return
             
-            # Get shapes: [T, B, F] for observations, [T, B, n_actions] for discrete_logits
-            T, B, _ = trajectory_data["observations"].shape
+            # Handle both list and tensor cases for all trajectory data
+            if isinstance(trajectory_data["store_inventories"], list):
+                inventory_tensor = torch.stack(trajectory_data["store_inventories"], dim=0)
+            else:
+                inventory_tensor = trajectory_data["store_inventories"]
+            
+            if isinstance(trajectory_data["discrete_logits"], list):
+                discrete_logits_tensor = torch.stack(trajectory_data["discrete_logits"], dim=0)
+            else:
+                discrete_logits_tensor = trajectory_data["discrete_logits"]
+            
+            print(f"DEBUG: inventory_tensor.shape = {inventory_tensor.shape}")
+            # Handle different tensor shapes
+            if len(inventory_tensor.shape) >= 3:
+                T, B = inventory_tensor.shape[0], inventory_tensor.shape[1]
+                # Sum across all remaining dimensions to get total inventory per sample
+                if len(inventory_tensor.shape) > 3:
+                    # Reshape to [T, B, -1] and sum across the last dimension
+                    inventory_tensor = inventory_tensor.reshape(T, B, -1).sum(dim=-1, keepdim=True)
+                n_stores = inventory_tensor.shape[2] if len(inventory_tensor.shape) > 2 else 1
+            else:
+                print(f"ERROR: Unexpected tensor shape: {inventory_tensor.shape}")
+                return
             
             # Limit the number of samples to plot
             n_samples = min(30, B)
             
-            # Select random batch indices first
+            # Select random batch indices
             random_batch_indices = torch.randperm(B)[:n_samples]
             
-            # Select the samples for each tensor
-            selected_inventories = trajectory_data["observations"][:, random_batch_indices, :]  # Shape: [T, n_samples, F]
-            selected_discrete_logits = trajectory_data["discrete_logits"][:, random_batch_indices, :]  # Shape: [T, n_samples, n_actions]
+            # Select the samples: [T, n_samples, n_stores] and [T, n_samples, n_actions]
+            selected_inventories = inventory_tensor[:, random_batch_indices, :]
+            selected_discrete_logits = discrete_logits_tensor[:, random_batch_indices, :]
             
-            # Flatten time and batch dimensions for plotting
-            # Reshape to [T*n_samples, F] and [T*n_samples, n_actions]
-            inventories_flat = selected_inventories.reshape(-1, selected_inventories.shape[-1]).detach().cpu()
+            # Flatten time and batch dimensions: [T*n_samples, n_stores] and [T*n_samples, n_actions]
+            inventories_flat = selected_inventories.reshape(-1, n_stores).detach().cpu()
             discrete_logits_flat = selected_discrete_logits.reshape(-1, selected_discrete_logits.shape[-1]).detach().cpu()
             
-            # Calculate inventory sums (sum across feature dimension)
+            # Calculate inventory sum (sum across stores)
             inventory_sum = inventories_flat.sum(dim=1).numpy()
             
-            # Compute probabilities from logits using softmax
+            # Apply normalization if requested
+            if normalize_by_mean_demand and 'past_demands' in trajectory_data and len(trajectory_data['past_demands']) > 0:
+                # Handle both list and tensor cases for past_demands
+                if isinstance(trajectory_data['past_demands'], list):
+                    past_demands_tensor = torch.stack(trajectory_data['past_demands'], dim=0)
+                else:
+                    past_demands_tensor = trajectory_data['past_demands']
+                
+                # Select the same samples: [T, n_samples, n_stores, n_periods]
+                selected_past_demands = past_demands_tensor[:, random_batch_indices, :, :]
+                
+                # Compute mean demand per sample per timestep: [T, n_samples]
+                mean_demands = selected_past_demands.mean(dim=(2, 3))  # Mean across stores and periods
+                
+                # Clamp to stabilize (same as prepare_inputs logic)
+                mean_demands = torch.clamp(mean_demands, min=1.0, max=100.0)
+                
+                # Flatten: [T * n_samples]
+                mean_demands_flat = mean_demands.reshape(-1).cpu().numpy()
+                
+                # Normalize inventory
+                inventory_sum = inventory_sum / (mean_demands_flat + 1e-8)
+        
+            # Compute probabilities from logits
             discrete_probs = torch.softmax(discrete_logits_flat, dim=-1)
+            action0_probs = discrete_probs[:, 0].numpy()
             
-            # Extract probability of discrete action 0 (first action)
-            action0_probs = discrete_probs[:, 0].numpy()  # Shape: [T*n_samples]
-            
-            # Create the plot with larger figure size
+            # Create the plot
             plt.figure(figsize=(16, 10))
-            
-            # Create scatter plot
             plt.scatter(inventory_sum, action0_probs, alpha=0.7, s=50, color='blue')
             
-            # Add dev loss to title if provided
+            # Add title with normalization indicator
             title = f'Inventory vs Probability of Discrete Action 0 (Epoch {epoch})'
+            if normalize_by_mean_demand:
+                title += ' [Inventory Normalized by Mean Demand]'
             if dev_loss is not None:
                 title += f' - Dev Loss: {dev_loss:.4f}'
             
-            # Use larger font sizes for better readability
             plt.title(title, fontsize=18)
-            plt.xlabel('Total Inventory', fontsize=16)
+            xlabel = 'Total Inventory (Normalized)' if normalize_by_mean_demand else 'Total Inventory'
+            plt.xlabel(xlabel, fontsize=16)
             plt.ylabel('Probability of Discrete Action 0', fontsize=16)
             plt.xticks(fontsize=14)
             plt.yticks(fontsize=14)
-            
-            # Set y-axis limits to [0, 1] since it's a probability
             plt.ylim(0, 1)
             
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
             
-            # Convert plot to image with higher DPI for better quality
+            # Convert plot to image
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=150)
             buf.seek(0)
             img = Image.open(buf)
             
-            # Log to wandb directly through current_metrics
             self.logger.current_metrics['inventory_discrete_action0_prob_plot'] = wandb.Image(img)
-            
-            # Close the plot to free memory
             plt.close()
             
         except Exception as e:
             print(f"Error generating inventory-discrete action 0 probability plot: {e}")
+            import traceback
+            traceback.print_exc()
 

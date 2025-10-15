@@ -43,7 +43,7 @@ class Logger:
         self.run_name = f"{env_name}__{exp_name}__{timestamp}"
         
         # Initialize W&B if enabled
-        if self.use_wandb and wandb.run is None:
+        if self.use_wandb:
             try:
                 wandb.init(
                     project="inventory_control",
