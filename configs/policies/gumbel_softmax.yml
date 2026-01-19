@@ -18,7 +18,7 @@ logging_params:
   'wandb_entity': "alvomatias"
   'exp_name': "gumbel_softmax"
   'env_name': "inventory"
-  'setting_name': "one_store_fixed_costs"
+  'setting_name': "one_store_multi_lead_time_lost"
   'log_inventory_action_plot': false
   'log_inventory_value_plot': false
   'log_inventory_discrete_action0_prob_plot': false

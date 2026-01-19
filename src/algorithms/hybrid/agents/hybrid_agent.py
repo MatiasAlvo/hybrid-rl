@@ -303,12 +303,17 @@ class HybridAgent(BaseAgent):
         
         # Process discrete outputs
         discrete_output = self.feature_registry.process_discrete_output(
+            # raw_outputs['discrete'].detach(),
             raw_outputs['discrete'],
             # argmax=False,  # Use argmax for inference, sample for training
             argmax=not train,  # Use argmax for inference, sample for training
             sample=True,      # Sample during training
             straight_through=False
         )
+
+        # # detach every entry in discrete_output
+        # for key in discrete_output:
+        #     discrete_output[key] = discrete_output[key].detach()
         
         # Process continuous outputs
         continuous_output = self.feature_registry.process_continuous_output(
@@ -332,7 +337,7 @@ class HybridAgent(BaseAgent):
             'discrete_action_indices': discrete_output['discrete_action_indices'],
             'log_probs': discrete_output['log_probs'],
             'continuous_values': continuous_output['continuous_values'],
-            'raw_continuous_samples': continuous_output['raw_continuous_samples'],
+            # 'raw_continuous_samples': continuous_output['raw_continuous_samples'].detach().clone(),
             'feature_actions': feature_actions
         }
         

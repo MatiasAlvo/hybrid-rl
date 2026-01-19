@@ -20,13 +20,10 @@ test_seeds :  # seeds for test set
 
 # Add wandb tracking configuration
 wandb_config:
-  group: "fixed_cost_64"  # This will be the group name in wandb
+  group: "multi_lead_time_lost"  # This will be the group name in wandb
   # You can add additional tracking parameters here as needed
   track_params:
-    - ["problem_params.discrete_features.fixed_ordering_cost.values.1", "fixed_cost"]
-    - ["store_params.underage_cost.value", "underage_cost"]
-    - ["store_params.holding_cost.value", "holding_cost"]
-    - ["store_params.lead_time.value", "lead_time"]
+    - ["problem_params.discrete_features.multi_lead_time_lost.values.1", "multi_lead_time_lost"]
 
 sample_data_params:
   'split_by_period': false
@@ -35,18 +32,19 @@ sample_data_params:
   'test_periods': null
 
 problem_params: 
-  'setting_name': "one_store_fixed_costs"
+  'setting_name': "one_store_multi_lead_time_lost"
   'n_stores': 1
   'n_warehouses': 0
   'n_extra_echelons': 0
-  'lost_demand': false
+  'lost_demand': true
   'maximize_profit': false
   'is_hybrid': true
   'discrete_features': 
-    'fixed_ordering_cost': 
-      'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
-      # 'values': [0.0, 0.0]
-      'values': [0.0, 64.0]
+    'multi_lead_time': 
+      'thresholds': [0.0, 4.4, inf]  # first and last values are the same across all discrete features
+      'values': [2.0, 3.0]
+      # 'thresholds': [0.0, 10.0, inf]  # first and last values are the same across all discrete features
+      # 'values': [2.0, 3.0]
 
 observation_params:
   'include_warehouse_inventory': False
@@ -59,7 +57,7 @@ observation_params:
     'mean': False
     'std': False
   'demand': 
-    'past_periods': 16 
+    'past_periods': 0 
     'period_shift': 0
   'include_past_observations':
     'arrivals': 0
@@ -73,13 +71,13 @@ observation_params:
 store_params: 
   'demand': 
     'distribution': 'poisson'
-    'mean': 10.0
+    'mean': 5.0
     'sample_across_stores': False
     'expand': False
     'clip': False
     'decimals': 3
   'lead_time': 
-    'value': 2
+    'value': 3 # has to be at least as large as the max lead time
     'vary_across_samples': False
     'sample_across_stores': False
     'expand': True
@@ -95,7 +93,7 @@ store_params:
     'expand': True
   'initial_inventory': 
     'sample': False
-    'inventory_periods': 2
+    'inventory_periods': 3 # has to be at least as large as the max lead time
   'procurement_cost':
     'value': 0.0
     'vary_across_samples': False
@@ -123,5 +121,5 @@ params_by_dataset :
   'test': 
     'n_samples': 1024 
     'batch_size': 128 
-    'periods': 100
+    'periods': 150
     'ignore_periods': 16

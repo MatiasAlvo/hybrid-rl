@@ -44,6 +44,49 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Get required losses from the model
         self.required_losses = model.required_losses
+        
+        # Debug flag for freezing backbone (easy to toggle)
+        self.freeze_backbone = True
+        
+        # Automatically freeze backbone if flag is set
+        if self.freeze_backbone:
+            self.freeze_backbone_params()
+
+    def freeze_backbone_params(self):
+        """Freeze backbone parameters for debugging - easy to undo"""
+        print("🔒 FREEZING BACKBONE PARAMETERS FOR DEBUGGING")
+        backbone_params_found = False
+        for name, param in self.model.named_parameters():
+            if 'backbone' in name:
+                param.requires_grad = False
+                print(f"  Frozen: {name}")
+                backbone_params_found = True
+        
+        if not backbone_params_found:
+            print("⚠️  WARNING: No parameters with 'backbone' in name found!")
+            print("Available parameters:")
+            for name, param in self.model.named_parameters():
+                print(f"  - {name}")
+        else:
+            print(f"✅ Successfully frozen backbone parameters")
+        
+        self.freeze_backbone = True
+
+    def unfreeze_backbone_params(self):
+        """Unfreeze backbone parameters - easy to undo the debugging"""
+        print("🔓 UNFREEZING BACKBONE PARAMETERS")
+        for name, param in self.model.named_parameters():
+            if 'backbone' in name:
+                param.requires_grad = True
+                print(f"  Unfrozen: {name}")
+        self.freeze_backbone = False
+
+    def toggle_backbone_freezing(self):
+        """Easy toggle for debugging - call this to freeze/unfreeze backbone"""
+        if self.freeze_backbone:
+            self.unfreeze_backbone_params()
+        else:
+            self.freeze_backbone_params()
 
     def optimize(self, trajectory_data):
         # Move to device once
@@ -51,7 +94,8 @@ class HybridWrapper(BaseOptimizerWrapper):
                           for k, v in trajectory_data.items()}
 
         # detach the observations
-        trajectory_data['observations'] = trajectory_data['observations']
+        trajectory_data['observations'] = trajectory_data['observations'].detach().clone()
+        # trajectory_data['observations'] = trajectory_data['observations']
         # flip the sign of the rewards
         trajectory_data['rewards'] = -trajectory_data['rewards']
 
@@ -153,7 +197,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             })
             
             # Add continuous samples if available (for GaussianPPOAgent)
-            if 'raw_continuous_samples' in trajectory_data:
+            if 'raw_continuous_samples' in trajectory_data and trajectory_data['raw_continuous_samples'] is not None:
                 tensors['raw_continuous_samples'] = trajectory_data['raw_continuous_samples'][effective_slice].reshape(-1, *trajectory_data['raw_continuous_samples'].shape[2:])
                 # tensors['raw_continuous_samples'] = trajectory_data['raw_continuous_samples'][effective_slice].reshape(-1, trajectory_data['raw_continuous_samples'].shape[2], trajectory_data['raw_continuous_samples'].shape[3])
         
@@ -573,33 +617,37 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Only analyze pathwise gradients if pathwise loss is used
         if required_losses['pathwise'] and pathwise_loss.requires_grad:
             pathwise_loss.backward(retain_graph=True)
+            # print(f"Pathwise loss gradients")
             for name, param in self.model.named_parameters():
                 if param.grad is not None:
-                    if any(key in name for key in ['continuous', 'backbone', 'discrete']):
-                        gradient_metrics[f'grad_analysis/pathwise/{name}'] = param.grad.abs().mean().item()
+                    # print(f"Gradient for parameter {name}: {param.grad.shape} with norm {torch.norm(param.grad)}")
+                    gradient_metrics[f'grad_analysis/pathwise/{name}'] = param.grad.abs().mean().item()
         
         # Zero gradients before checking other losses
         self.optimizer.zero_grad()
         
         # Only analyze policy gradients if policy gradient loss is used
         if required_losses['policy_gradient'] and policy_loss.requires_grad:
+            # print(f"Policy loss gradients")
             policy_loss.backward(retain_graph=True)
             for name, param in self.model.named_parameters():
                 if param.grad is not None:
-                    if any(key in name for key in ['continuous', 'discrete', 'backbone']):
-                        gradient_metrics[f'grad_analysis/policy/{name}'] = param.grad.abs().mean().item()
+                    # print(f"Gradient for parameter {name}: {param.grad.shape} with norm {torch.norm(param.grad)}")
+                    gradient_metrics[f'grad_analysis/policy/{name}'] = param.grad.abs().mean().item()
         
         # Zero gradients again
         self.optimizer.zero_grad()
         
         # Only analyze value gradients if value loss is used
         if required_losses['value'] and value_loss.requires_grad:
+            # print(f"Value loss gradients")
             value_loss.backward(retain_graph=True)
             for name, param in self.model.named_parameters():
                 if param.grad is not None:
-                    if any(key in name for key in ['value', 'backbone']):
-                        gradient_metrics[f'grad_analysis/value/{name}'] = param.grad.abs().mean().item()
+                    # print(f"Gradient for parameter {name}: {param.grad.shape} with norm {torch.norm(param.grad)}")
+                    gradient_metrics[f'grad_analysis/value/{name}'] = param.grad.abs().mean().item()
         
+        # raise Exception("Stop here")
         # Zero gradients again
         self.optimizer.zero_grad()
         
@@ -630,6 +678,12 @@ class HybridWrapper(BaseOptimizerWrapper):
         if loss.requires_grad:
             loss.backward()
             
+            # Zero out gradients for frozen backbone parameters
+            if self.freeze_backbone:
+                for name, param in self.model.named_parameters():
+                    if ('backbone' in name or 'discrete' in name) and param.grad is not None:
+                        param.grad.zero_()
+            
             # Apply gradient clipping if specified
             if processed_data['max_grad_norm'] is not None:
                 grad_metrics = self._clip_gradients_by_component(processed_data['max_grad_norm'])
@@ -652,6 +706,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             #     print("=" * 60)
         
         return grad_metrics
+    
     def _clip_gradients_by_component_debug(self, max_grad_norm):
         """Clip gradients with a fixed maximum norm."""
         print()

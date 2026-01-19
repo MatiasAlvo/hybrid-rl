@@ -52,6 +52,26 @@ def get_date_folder():
     """Get folder name based on current date"""
     return datetime.now().strftime("%Y%m%d")
 
+def zero_continuous_parameters(model):
+    """Zero out continuous parameters for debugging purposes"""
+    print("🔧 ZEROING OUT CONTINUOUS PARAMETERS FOR DEBUGGING")
+    continuous_params_count = 0
+    
+    for name, param in model.named_parameters():
+        if 'continuous' in name:
+            with torch.no_grad():
+                param.zero_()
+            print(f"  Zeroed: {name} (shape: {param.shape})")
+            continuous_params_count += 1
+    
+    if continuous_params_count == 0:
+        print("⚠️  WARNING: No continuous parameters found!")
+        print("Available parameters:")
+        for name, param in model.named_parameters():
+            print(f"  - {name} (shape: {param.shape})")
+    else:
+        print(f"✅ Successfully zeroed {continuous_params_count} continuous parameters")
+
 def create_parameter_groups_with_lr(model, base_lr, lr_multipliers):
     """Create parameter groups with different learning rate multipliers"""
     param_groups = []
@@ -331,6 +351,9 @@ def run_training(setting_config, hyperparams_config, mode='both'):
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         print("Model loaded successfully")
+        
+        # Zero out continuous parameters for debugging
+        zero_continuous_parameters(model)
 
     # Initialize simulator based on type
     simulator = (HybridSimulator(feature_registry, model=model, device=device) 

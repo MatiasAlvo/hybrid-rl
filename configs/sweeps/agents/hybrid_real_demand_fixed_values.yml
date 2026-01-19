@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid.yml'
+  hyperparams: 'configs/policies/hybrid_real_demand.yml'
 
 method: 'random'
 metric:

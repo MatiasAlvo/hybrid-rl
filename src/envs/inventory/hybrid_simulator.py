@@ -31,6 +31,7 @@ class HybridSimulator(Simulator):
         """Initialize problem-specific cost and transition functions"""
         # Register cost functions based on problem parameters
         self._register_cost_functions(problem_params['discrete_features'])
+        self._register_transition_functions(problem_params['discrete_features'])
         
         # Get normalize_observations from observation_params
         self.normalize_observations = observation_params.get('normalize_observations', False)
@@ -132,16 +133,24 @@ class HybridSimulator(Simulator):
         allocation = feature_actions['total_action']
         
         # 6. Update inventories using same pattern as base simulator
-        lead_time = int(observation['lead_times'][0, 0].item())
-        if observation['lead_times'].unique().numel() > 1:
-            raise ValueError('observation["lead_times"] contains more than one different value')
-        
-        observation['store_inventories'] = self._update_inventories_in_place(
-            inventory,
-            post_inventory_on_hand,
-            allocation,
-            lead_time
-        )
+
+        if self.transition_functions.get('multi_lead_time'):
+            observation['store_inventories'] = self._update_multi_lead_time(
+                inventory=inventory,
+                post_inventory_on_hand=post_inventory_on_hand,
+                action_dict=action_dict
+            )
+        else:
+            lead_time = int(observation['lead_times'][0, 0].item())
+            if observation['lead_times'].unique().numel() > 1:
+                raise ValueError('observation["lead_times"] contains more than one different value')
+            
+            observation['store_inventories'] = self._update_inventories_in_place(
+                inventory,
+                post_inventory_on_hand,
+                allocation,
+                lead_time
+            )
 
         # Update current period
         self.observation['current_period'] += 1
@@ -199,16 +208,17 @@ class HybridSimulator(Simulator):
         return shortage_cost.sum(dim=1)
     
     def _register_cost_functions(self, problem_params):
-        """Register cost functions based on problem configuration"""
-        # Base costs (always included)
-        # self.cost_functions['holding'] = self._calculate_holding_costs
-        # self.cost_functions['shortage'] = self._calculate_shortage_costs
-        
+        """Register cost functions based on problem configuration"""        
         # Optional costs based on problem parameters
         if problem_params.get('fixed_ordering_cost'):
             self.cost_functions['fixed_ordering'] = self._calculate_fixed_ordering_costs
         if problem_params.get('bulk_discounts'):
             self.cost_functions['bulk_discount'] = self._calculate_bulk_discount_costs
+    
+    def _register_transition_functions(self, problem_params):
+        """Register transition functions based on problem configuration"""
+        if problem_params.get('multi_lead_time'):
+            self.transition_functions['multi_lead_time'] = self._update_multi_lead_time
     
     def _update_current_inventory(self, observation, action):
         """Update current period inventory (without new orders)"""
@@ -234,14 +244,56 @@ class HybridSimulator(Simulator):
             if lead_time < next_state['store_inventories'].shape[-1]:
                 next_state['store_inventories'][:, :, lead_time] += order_amount
     
+    def _calculate_fixed_ordering_costs_debug(self, observation, action_dict, debug=True):
+        """Calculate fixed ordering costs"""
+        probs = action_dict['feature_actions']['fixed_ordering_cost']['range_probs']
+        vals  = action_dict['feature_actions']['fixed_ordering_cost']['values']  # constants
+        print(f'probs: {probs[0]}')
+
+        fixed_costs = (probs * vals.unsqueeze(0)).sum(dim=(-1, -2))
+
+        if debug:
+            # 1) Inspect autograd connectivity
+            print("[fixed_costs] requires_grad:", fixed_costs.requires_grad)
+            print("[probs] requires_grad:", probs.requires_grad)
+            print("[probs] grad_fn:", getattr(probs, "grad_fn", None))
+
+            # 2) Register a hook to see if gradient flows back to probs during real backward
+            def _probs_hook(g):
+                try:
+                    print("[LEAK CHECK] grad wrt range_probs norm:", g.norm().item())
+                except Exception as e:
+                    print("[LEAK CHECK] hook error:", e)
+            try:
+                probs.register_hook(_probs_hook)
+            except Exception as e:
+                print("[LEAK CHECK] register_hook failed:", e)
+
+            # 3) Local grad probe (does not step optimizer). This will do a tiny backward.
+            try:
+                # keep graph if you need subsequent backprop elsewhere
+                g = torch.autograd.grad(
+                    fixed_costs.sum(), probs,
+                    retain_graph=True, allow_unused=True
+                )[0]
+                print("[LOCAL PROBE] d fixed_costs / d range_probs norm:",
+                    None if g is None else g.norm().item())
+            except RuntimeError as e:
+                print("[LOCAL PROBE] grad failed:", e)
+
+        return fixed_costs
+
+
     # Cost calculation methods
     def _calculate_fixed_ordering_costs(self, observation, action_dict):
         """Calculate fixed ordering costs"""
+        # remember to detach and clone the feature_probs!!
         feature_probs = action_dict['feature_actions']['fixed_ordering_cost']['range_probs']
         feature_values = action_dict['feature_actions']['fixed_ordering_cost']['values']
         
         fixed_costs = (feature_probs * feature_values.unsqueeze(0)).sum(dim=(-1, -2))
-        return fixed_costs
+        # return fixed_costs
+        return fixed_costs.detach().clone()
     
     def _calculate_bulk_discount_costs(self, observation, action_dict):
         """Calculate bulk discount costs"""
@@ -257,10 +309,54 @@ class HybridSimulator(Simulator):
         # Implementation
         pass
     
-    def _update_variable_lead_time(self, observation, action_dict):
-        """Update lead times"""
-        # Implementation
-        pass
+    def _update_multi_lead_time(self, inventory, post_inventory_on_hand, action_dict):
+        """
+        Lead-time update only.
+        Takes precomputed `inventory` [B,S,L] and `post_inventory_on_hand` [B,S].
+        Inserts new orders per-feature into columns matching their lead times.
+
+        Expects in action_dict:
+        action_dict['feature_actions']['multi_lead_time']['action'] : [B, S, F]
+        action_dict['feature_actions']['multi_lead_time']['values'] : [F]  (τ in periods)
+        """
+        B, S, L = inventory.shape
+        device = inventory.device
+
+        # 1) Arrivals + shift (no recomputation of demand/costs here)
+        head = post_inventory_on_hand + inventory[:, :, 1]              # slot 0 after update
+        internal_cols = self.move_columns_left(inventory, 1, L - 1)     # list of [B,S], possibly empty
+        tail_zero = torch.zeros_like(inventory[:, :, 0])                 # last slot starts at 0
+        new_inventory = torch.stack([head, *internal_cols, tail_zero], dim=2)  # [B,S,L]
+
+        # 2) Fetch multi-lead orders
+        mla = action_dict['feature_actions']['multi_lead_time']
+        allocation = mla['action']                                      # [B,S,F]
+        lead_times = mla['values']                                      # [F]
+
+        if not torch.is_tensor(lead_times):
+            lead_times = torch.tensor(lead_times, device=device, dtype=torch.long)
+        else:
+            lead_times = lead_times.to(device=device, dtype=torch.long)
+
+        if allocation.dim() != 3 or allocation.shape[-1] != lead_times.numel():
+            raise ValueError(
+                f"Expected allocation [B,S,F] matching len(lead_times)={lead_times.numel()}, "
+                f"got {tuple(allocation.shape)}."
+            )
+
+        # 3) Bounds check and scatter-add (vectorized, out-of-place)
+        if not ((lead_times >= 1) & (lead_times <= L)).all():
+            bad = lead_times[~((lead_times >= 1) & (lead_times <= L))]
+            raise ValueError(f"Lead times out of bounds for pipeline length {L}: {bad.tolist()}")
+
+        col_idx = (lead_times - 1).long()                                # τ -> column τ-1
+        onehot = torch.nn.functional.one_hot(col_idx, num_classes=L).to(new_inventory.dtype)  # [F,L]
+        add_tensor = torch.einsum('b s f, f l -> b s l', allocation, onehot)  # [B,S,L]
+
+        new_inventory = new_inventory + add_tensor                        # preserves grads
+
+        return new_inventory
+
     
     def _apply_capacity_constraints(self, observation, action_dict):
         """Apply capacity constraints"""

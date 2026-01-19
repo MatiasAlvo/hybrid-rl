@@ -210,18 +210,26 @@ S = 62
 # K = 80
 # Average Cost: 40.83
 
-for K in [1, 30, 40, 50, 60, 64, 70, 80]:
-    print(f"K = {K}")
-    # print(c(s, S, h, p, lambd, K, L))
+# fixed_K = 30
+# fixed_s = 26
+# for S in range(30, 70):
+#     cost_check = simulate_inventory(p, h, lambd, fixed_K, fixed_s, S, L)
+#     print(f"S = {S}, Cost: {cost_check:.2f}")
 
-    s_star, S_star, c_star = find_optimal_policy(h, p, lambd, K, L)
-    print(f"Optimal policy: s* = {s_star}, S* = {S_star}")
-    print(f"Average Cost: {c_star:.2f}")
-    cost_check = simulate_inventory(p, h, lambd, K, s, S, L)
-    # if difference is too large, print the difference
-    if abs(cost_check - c_star)/c_star > 0.1:
-        print(f"Difference: {cost_check - c_star:.2f}")
-    print()
+iterate_over_K = True
+if iterate_over_K:
+    for K in [0, 1, 30, 40, 50, 60, 64, 70, 80]:
+        print(f"K = {K}")
+        # print(c(s, S, h, p, lambd, K, L))
+
+        s_star, S_star, c_star = find_optimal_policy(h, p, lambd, K, L)
+        print(f"Optimal policy: s* = {s_star}, S* = {S_star}")
+        print(f"Average Cost: {c_star:.2f}")
+        cost_check = simulate_inventory(p, h, lambd, K, s, S, L)
+        # if difference is too large, print the difference
+        if abs(cost_check - c_star)/c_star > 0.1:
+            print(f"Difference: {cost_check - c_star:.2f}")
+        print()
 
 test_cases = [
     # h, p, lambd, K, s, S, L
