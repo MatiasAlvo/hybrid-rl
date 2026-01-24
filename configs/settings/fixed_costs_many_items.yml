@@ -36,7 +36,7 @@ sample_data_params:
 
 problem_params: 
   'setting_name': "one_store_fixed_costs"
-  'n_stores': 1
+  'n_stores': 2
   'n_warehouses': 0
   'n_extra_echelons': 0
   'lost_demand': false
@@ -44,10 +44,8 @@ problem_params:
   'is_hybrid': true
   'discrete_features': 
     'fixed_ordering_cost': 
-      'thresholds': [-0.0001, 0.0, 60.0]  # first and last values are the same across all discrete features
-      # 'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
-      # 'values': [0.0, 0.0]
-      'values': [0.0, 64.0]
+      'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
+      'values': [0.0, 50.0]
 
 observation_params:
   'include_warehouse_inventory': False
@@ -60,7 +58,7 @@ observation_params:
     'mean': False
     'std': False
   'demand': 
-    'past_periods': 16 
+    'past_periods': 0 
     'period_shift': 0
   'include_past_observations':
     'arrivals': 0
@@ -74,31 +72,31 @@ observation_params:
 store_params: 
   'demand': 
     'distribution': 'poisson'
-    'mean': 10.0
+    'mean': [0.7692, 0.3846]  # 40/52 ≈ 0.7692 and 20/52 ≈ 0.3846
     'sample_across_stores': False
     'expand': False
     'clip': False
     'decimals': 3
   'lead_time': 
-    'value': 2
+    'value': 0
     'vary_across_samples': False
     'sample_across_stores': False
     'expand': True
   'holding_cost': 
-    'value': 1.0
+    'value': [0.0385, 0.0385]
     'vary_across_samples': False
     'sample_across_stores': False
     'expand': True
   'underage_cost': 
-    'value': 9.0
+    'value': [0.9615, 0.9615]
     'vary_across_samples': False
     'sample_across_stores': False
     'expand': True
   'initial_inventory': 
     'sample': False
-    'inventory_periods': 2
+    'inventory_periods': 1
   'procurement_cost':
-    'value': 0.0
+    'value': [0.1, 0.4]
     'vary_across_samples': False
     'sample_across_stores': False
     'expand': True
@@ -114,15 +112,15 @@ params_by_dataset :
   'train': 
     'n_samples': 1024 
     'batch_size': 128  # Values tested: 1024, 8192
-    'periods': 100 
-    'ignore_periods': 16 
+    'periods': 200 
+    'ignore_periods': 50 
   'dev': 
     'n_samples': 1024 
     'batch_size': 128 
-    'periods': 100 
-    'ignore_periods': 16 
+    'periods': 200 
+    'ignore_periods': 50
   'test': 
     'n_samples': 1024 
     'batch_size': 128 
-    'periods': 100
-    'ignore_periods': 16
+    'periods': 1000
+    'ignore_periods': 200

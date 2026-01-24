@@ -1,0 +1,32 @@
+# Fixed Costs Many items Setting Sweep Configuration
+config_files:
+  setting: 'configs/settings/fixed_costs_many_items.yml'
+
+parameters:
+  normalize_observations:
+    values: [False]
+  fixed_cost:
+    distribution: 'categorical'
+    values: [50]
+  # Store-specific parameters (if you want to sweep over them)
+  # holding_cost_store1:
+  #   distribution: uniform
+  #   min: 1.0
+  #   max: 5.0
+  # holding_cost_store2:
+  #   distribution: uniform
+  #   min: 1.0
+  #   max: 5.0
+  # underage_cost:
+  #   distribution: uniform
+  #   min: 20.0
+  #   max: 100.0
+  # procurement_cost_store1:
+  #   distribution: uniform
+  #   min: 0.05
+  #   max: 0.5
+  # procurement_cost_store2:
+  #   distribution: uniform
+  #   min: 0.05
+  #   max: 0.5
+

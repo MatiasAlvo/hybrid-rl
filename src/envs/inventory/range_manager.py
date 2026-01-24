@@ -24,6 +24,9 @@ class RangeManager:
         self.ranges = self._compute_ranges()
         self.n_sub_ranges = len(self.ranges)
         
+        # Store n_stores and n_features for multi-dimensional continuous outputs
+        self.n_stores = config.get('n_stores', 1)
+        
         # Pre-compute mappings from sub-ranges to feature ranges
         self.feature_range_mappings = self._precompute_feature_range_mappings()
         
@@ -150,7 +153,7 @@ class RangeManager:
             
         return {
             'n_discrete': self.n_sub_ranges,    # One discrete output per sub-range
-            'n_continuous': self.n_sub_ranges   # One continuous output per sub-range
+            'n_continuous': self.n_stores * self.n_sub_ranges   # Multi-dimensional: n_stores * n_sub_ranges
         }
     
     def convert_network_output_to_simulator_action(
@@ -380,15 +383,19 @@ class RangeManager:
             return None
             
         feature_actions = {}
-        batch_size, n_stores, _ = discrete_probs.shape
+        # batch_size, n_stores, _ = discrete_probs.shape
+        batch_size, n_stores, _ = continuous_values.shape
         
         # Iterate over features
         for feature_name, mapping in self.feature_range_mappings.items():
             n_feature_ranges = len(mapping['values'])
             feature_action = torch.zeros(batch_size, n_stores, n_feature_ranges, device=discrete_probs.device)
-            feature_discrete = torch.zeros(batch_size, n_stores, n_feature_ranges, device=discrete_probs.device)
+            # we consider a single discrete action for all stores
+            feature_discrete = torch.zeros(batch_size, 1, n_feature_ranges, device=discrete_probs.device)
+            # feature_discrete = torch.zeros(batch_size, n_stores, n_feature_ranges, device=discrete_probs.device)
             
-            # For each range of this feature
+            # For each range of this feature, we consider the sub-ranges that correspond to this range
+            # and sum the discrete probabilities and continuous values over those sub-ranges
             for range_idx, sub_range_indices in enumerate(mapping['range_indices']):
 
                 # In range_manager.py around line 376, replace the failing line with:
@@ -420,8 +427,8 @@ class RangeManager:
                         print(f"continuous_values max valid index: {continuous_values.shape[-1] - 1}")
                         # raise ValueError("Index out of bounds in range_manager")
 
-                # Original operation
-                sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
+                # # Original operation
+                # sub_actions = discrete_probs[..., sub_range_indices] * continuous_values[..., sub_range_indices]
 
                 # Sum over the sub-ranges that correspond to this range
                 # (this correspondence was pre-computed in _precompute_feature_range_mappings)
@@ -438,6 +445,7 @@ class RangeManager:
             }
         
         feature_actions['total_action'] = self.compute_total_action(discrete_probs, continuous_values, non_negative=False)
+        average_probs = discrete_probs.mean(dim=(0, 1)) 
         
         return feature_actions
 

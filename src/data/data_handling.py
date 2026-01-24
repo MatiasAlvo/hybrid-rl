@@ -203,7 +203,21 @@ class Scenario():
         if seed is not None:
             np.random.seed(seed)
         
-        return np.random.poisson(demand_params['mean'], size=(self.num_samples, problem_params['n_stores'], periods))
+        mean = demand_params['mean']
+        
+        # Handle per-store means (when mean is a list/array)
+        if isinstance(mean, (list, np.ndarray)) and len(mean) == problem_params['n_stores']:
+            # Generate demand for each store separately with its own mean
+            demand = np.zeros((self.num_samples, problem_params['n_stores'], periods))
+            for store_idx in range(problem_params['n_stores']):
+                demand[:, store_idx, :] = np.random.poisson(
+                    mean[store_idx], 
+                    size=(self.num_samples, periods)
+                )
+            return demand
+        else:
+            # Single mean value for all stores
+            return np.random.poisson(mean, size=(self.num_samples, problem_params['n_stores'], periods))
 
     def generate_data(self, demand_params, **kwargs):
         """

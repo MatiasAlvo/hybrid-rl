@@ -1,0 +1,95 @@
+# Alternating Hybrid Agent Sweep Configuration for Many Stores
+config_files:
+  hyperparams: 'configs/policies/alternate_hybrid.yml'
+
+method: 'random'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  anneal_lr:
+    values:
+      - true
+      - false
+  buffer_periods:
+    values:
+      - 20
+      - 10
+  clip_coef:
+    distribution: uniform
+    max: 0.2
+    min: 0.1
+  fixed_cost:
+    distribution: categorical
+    values:
+      - 64
+  gae_lambda:
+    distribution: uniform
+    max: 0.999
+    min: 0.95
+  gamma:
+    distribution: uniform
+    max: 0.999
+    min: 0.99
+  learning_rate:
+    distribution: log_uniform_values
+    max: 0.001
+    min: 0.00001
+  loss_schedule_pathwise:
+      values:
+        - 1
+        - 3
+        - 5
+        - 7
+  max_grad_norm:
+    distribution: uniform
+    max: 10
+    min: 1
+  normalize_advantages:
+    values:
+      - true
+  normalize_observations:
+    values:
+      - false
+  num_epochs:
+    values:
+      - 5
+      - 3
+  pathwise_coef:
+    distribution: log_uniform_values
+    max: 100
+    min: 0.1
+  policy_activation:
+    values:
+      - Tanh
+      - ELU
+  reward_scaling:
+    values:
+      - true
+  reward_scaling_pathwise:
+    values:
+      - true
+  use_gae:
+    values:
+      - true
+  value_activation:
+    values: 
+      - Tanh
+  value_function_coef:
+    distribution: log_uniform_values
+    max: 0.2
+    min: 0.1
+  continuous_scale:
+    values:
+      - 1.0
+  continuous_shift:
+    values: 
+      - 1.0
+      - 5.0
+  normalize_by_mean_demand:
+    values:
+      - false
+  use_wandb:
+    values:
+      - true

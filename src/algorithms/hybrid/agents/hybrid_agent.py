@@ -293,13 +293,15 @@ class HybridAgent(BaseAgent):
         raw_outputs = self.policy(processed_obs, process_state=False)
         
         # Debug raw outputs
-        if isinstance(raw_outputs, dict) and 'discrete' in raw_outputs:
-            discrete_logits = raw_outputs['discrete']
-            if torch.isnan(discrete_logits).any() or torch.isinf(discrete_logits).any():
-                print("Warning: NaN or Inf in discrete logits from policy")
-                print("Discrete logits stats:", 
-                      f"range [{discrete_logits.min().item():.3f}, {discrete_logits.max().item():.3f}], "
-                      f"mean {discrete_logits.mean().item():.3f}")
+        debug_here = False
+        if debug_here:
+            if isinstance(raw_outputs, dict) and 'discrete' in raw_outputs:
+                discrete_logits = raw_outputs['discrete']
+                if torch.isnan(discrete_logits).any() or torch.isinf(discrete_logits).any():
+                    print("Warning: NaN or Inf in discrete logits from policy")
+                    print("Discrete logits stats:", 
+                        f"range [{discrete_logits.min().item():.3f}, {discrete_logits.max().item():.3f}], "
+                        f"mean {discrete_logits.mean().item():.3f}")
         
         # Process discrete outputs
         discrete_output = self.feature_registry.process_discrete_output(
@@ -381,6 +383,277 @@ class HybridAgent(BaseAgent):
             'value': True,             # For PPO advantage estimation
             'pathwise': True,          # For continuous actions
             'entropy': True            # For exploration
+        }
+
+class AlternateHybridAgent(HybridAgent):
+
+    pass
+
+class FixedDiscreteHybridAgent(HybridAgent):
+
+    def _get_required_losses(self):
+        """HybridAgent needs all loss components."""
+        return {
+            'policy_gradient': False,   # For discrete actions
+            'value': False,             # For PPO advantage estimation
+            'pathwise': True,          # For continuous actions
+            'entropy': False            # For exploration
+        }
+
+    def base_stock_ordering_policy(self, observation):
+        """
+        Vectorized base-stock ordering policy based on the plot.
+        
+        Orders (purple/red dots) occur when:
+        - x1 <= -2, OR
+        - x2 <= -2, OR
+        - x1 = -1 AND x2 = -1
+        
+        Args:
+            observation: dict containing 'store_inventories' of shape [batch, 2, 1]
+        
+        Returns:
+            dict with:
+                'discrete_probs': shape [batch, 1, 2] where [..., 0] = prob of no-order and [..., 1] = prob of order
+                'discrete_action_indices': shape [batch, 1] with action indices (0 = no-order, 1 = order)
+        """
+        # Extract and squeeze to [batch, 2]
+        states = observation['store_inventories'].squeeze(-1)  # [batch, 2]
+        
+        x1 = states[:, 0]  # [batch]
+        x2 = states[:, 1]  # [batch]
+        
+        # Define ordering conditions
+        # Order when x1 <= -2 OR x2 <= -2 OR (x1 = -1 AND x2 = -1)
+        condition_x1 = x1 <= -2
+        condition_x2 = x2 <= -2
+        condition_special = (x1 == -1) & (x2 == -1)
+        
+        should_order = condition_x1 | condition_x2 | condition_special  # [batch]
+        
+        # Create discrete_probs tensor [batch, 1, 2]
+        # Format: [..., 0] = no-order, [..., 1] = order
+        discrete_probs = torch.zeros(states.shape[0], 1, 2, 
+                                    dtype=states.dtype, 
+                                    device=states.device)
+        
+        # Set probabilities: [1, 0] for no-order, [0, 1] for order
+        discrete_probs[should_order, 0, 0] = 0  # no-order prob
+        discrete_probs[should_order, 0, 1] = 1  # order prob
+        
+        discrete_probs[~should_order, 0, 0] = 1  # no-order prob
+        discrete_probs[~should_order, 0, 1] = 0  # order prob
+        
+        # Create discrete_action_indices [batch, 1]
+        # 0 = no-order, 1 = order
+        discrete_action_indices = should_order.long().unsqueeze(1)  # [batch, 1]
+        
+        discrete_output = {
+            'discrete_probs': discrete_probs,
+            'discrete_action_indices': discrete_action_indices
+        }
+        
+        return discrete_output
+    
+    def base_stock_continuous_ordering_policy(self, observation, base_stock_levels):
+        """
+        Vectorized base-stock ordering policy that computes continuous order quantities.
+        
+        Args:
+            observation: dict containing 'store_inventories' of shape [batch, n_items, 1]
+            base_stock_levels: list or tensor of length n_items, containing the base-stock level for each item
+        
+        Returns:
+            dict with 'continuous_values' of shape [batch, 2, n_items]
+                where [..., 0, :] = 0 (no continuous component for no-order action)
+                and [..., 1, :] = order quantities to reach base_stock_levels
+        """
+        # Extract and squeeze to [batch, n_items]
+        states = observation['store_inventories'].squeeze(-1)  # [batch, n_items]
+        
+        batch_size = states.shape[0]
+        n_items = states.shape[1]
+        
+        # Convert base_stock_levels to tensor if needed
+        if not isinstance(base_stock_levels, torch.Tensor):
+            base_stock_levels = torch.tensor(base_stock_levels, 
+                                            dtype=states.dtype, 
+                                            device=states.device)
+        
+        # Ensure base_stock_levels has the right shape [n_items]
+        base_stock_levels = base_stock_levels.view(n_items)
+        
+        # Compute order quantities: max(0, S - x) for each item
+        # Broadcasting: [batch, n_items] - [n_items] -> [batch, n_items]
+        order_quantities = torch.clamp(base_stock_levels - states, min=0)  # [batch, n_items]
+        
+        # Create continuous_values tensor [batch, 2, n_items]
+        continuous_values = torch.zeros(batch_size, 2, n_items,
+                                    dtype=states.dtype,
+                                    device=states.device)
+        
+        # Set the order action values (index 1)
+        continuous_values[:, 1, :] = order_quantities
+        
+        # Index 0 remains all zeros (no-order action has no continuous component)
+        
+        continuous_output = {
+            'continuous_values': continuous_values.transpose(1, 2)  # Swap second and third dims: [batch, n_items, 2]
+        }
+        
+        return continuous_output
+
+    def forward(self, observation, train=True):
+        """Forward pass through the agent using the new processing functions"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
+        # Get raw outputs from policy
+        raw_outputs = self.policy(processed_obs, process_state=False)
+        
+        discrete_output = self.base_stock_ordering_policy(observation)
+        
+        # Process continuous outputs
+        continuous_output = self.feature_registry.process_continuous_output(
+            raw_outputs.get('continuous'),
+            discrete_action_indices=discrete_output['discrete_action_indices'],
+            continuous_mean=raw_outputs.get('continuous_mean'),
+            continuous_log_std=raw_outputs.get('continuous_log_std'),
+            random_continuous=False,  # Default to deterministic continuous actions
+            observations=observation
+        )
+        
+        # Compute feature actions
+        feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
+            discrete_output['discrete_probs'],
+            continuous_output['continuous_values']
+        )
+        
+        # Combine outputs into action dictionary
+        action_dict = {
+            'discrete_probs': discrete_output['discrete_probs'],
+            'discrete_action_indices': discrete_output['discrete_action_indices'],
+            'log_probs': None,
+            'continuous_values': continuous_output['continuous_values'],
+            'feature_actions': feature_actions
+        }
+        
+        # Get value if value network exists
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+        
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
+        }
+
+class FixedContinuousHybridAgent(FixedDiscreteHybridAgent):
+
+    def _get_required_losses(self):
+        """HybridAgent needs all loss components."""
+        return {
+            'policy_gradient': True,   # For discrete actions
+            'value': True,             # For PPO advantage estimation
+            'pathwise': False,          # For continuous actions
+            'entropy': True            # For exploration
+        }
+    
+    def forward(self, observation, train=True):
+        """Forward pass through the agent using the new processing functions"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
+        # Get raw outputs from policy
+        raw_outputs = self.policy(processed_obs, process_state=False)
+        
+        # Process discrete outputs
+        discrete_output = self.feature_registry.process_discrete_output(
+            # raw_outputs['discrete'].detach(),
+            raw_outputs['discrete'],
+            # argmax=False,  # Use argmax for inference, sample for training
+            argmax=not train,  # Use argmax for inference, sample for training
+            sample=True,      # Sample during training
+            straight_through=False
+        )
+        
+        # Process continuous outputs
+        continuous_output = self.base_stock_continuous_ordering_policy(observation, [35, 19])
+        
+        # Compute feature actions
+        feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
+            discrete_output['discrete_probs'],
+            continuous_output['continuous_values']
+        )
+        
+        # Combine outputs into action dictionary
+        action_dict = {
+            'discrete_probs': discrete_output['discrete_probs'],
+            'discrete_action_indices': discrete_output['discrete_action_indices'],
+            'log_probs': discrete_output['log_probs'],
+            'continuous_values': continuous_output['continuous_values'],
+            'feature_actions': feature_actions
+        }
+        
+        # Get value if value network exists
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+        
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
+        }
+
+class OptimalMultiItem(FixedDiscreteHybridAgent):
+
+    def _get_required_losses(self):
+        """HybridAgent needs all loss components."""
+        return {
+            'policy_gradient': False,   # For discrete actions
+            'value': False,             # For PPO advantage estimation
+            'pathwise': False,          # For continuous actions
+            'entropy': False            # For exploration
+        }
+    
+    # optimal cost for low variability setting in Ata 2025 (see Figure 2a)
+    #Epoch 3: Train Loss = 1.2461, Dev Loss = 1.2421
+    def forward(self, observation, train=True):
+        """Forward pass through the agent using the new processing functions"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
+        # Get raw outputs from policy
+        raw_outputs = self.policy(processed_obs, process_state=False)
+        
+        discrete_output = self.base_stock_ordering_policy(observation)
+        
+        # Process continuous outputs
+        continuous_output = self.base_stock_continuous_ordering_policy(observation, [35, 19])
+        
+        # Compute feature actions
+        feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
+            discrete_output['discrete_probs'],
+            continuous_output['continuous_values']
+        )
+        
+        # Combine outputs into action dictionary
+        action_dict = {
+            'discrete_probs': discrete_output['discrete_probs'],
+            'discrete_action_indices': discrete_output['discrete_action_indices'],
+            'log_probs': None,
+            'continuous_values': continuous_output['continuous_values'],
+            'feature_actions': feature_actions
+        }
+        
+        # Get value if value network exists
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+        
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
         }
 
 class FactoredHybridAgent(HybridAgent):

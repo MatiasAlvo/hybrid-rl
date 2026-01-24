@@ -103,7 +103,15 @@ class HybridSimulator(Simulator):
         # 2. Calculate post-demand inventory
         inventory = observation['store_inventories']
         inventory_on_hand = inventory[:, :, 0]
-        post_inventory_on_hand = inventory_on_hand - current_demands
+
+        lead_time = int(observation['lead_times'][0, 0].item())
+        if observation['lead_times'].unique().numel() > 1:
+            raise ValueError('observation["lead_times"] contains more than one different value')
+        
+        if lead_time == 0:
+            post_inventory_on_hand = inventory_on_hand - current_demands + action_dict['feature_actions']['total_action']
+        else:
+            post_inventory_on_hand = inventory_on_hand - current_demands
         
         # 3. Calculate variable costs
         if self.maximize_profit:
@@ -141,19 +149,23 @@ class HybridSimulator(Simulator):
                 action_dict=action_dict
             )
         else:
-            lead_time = int(observation['lead_times'][0, 0].item())
-            if observation['lead_times'].unique().numel() > 1:
-                raise ValueError('observation["lead_times"] contains more than one different value')
-            
-            observation['store_inventories'] = self._update_inventories_in_place(
-                inventory,
-                post_inventory_on_hand,
-                allocation,
-                lead_time
-            )
+            if lead_time == 0:
+                observation['store_inventories'] = post_inventory_on_hand.unsqueeze(2)
+            else:
+                observation['store_inventories'] = self._update_inventories_in_place(
+                    inventory,
+                    post_inventory_on_hand,
+                    allocation,
+                    lead_time
+                )
 
         # Update current period
         self.observation['current_period'] += 1
+
+        # compute average holding costs, underage costs, procurement costs
+        average_holding_costs = observation['holding_costs'].mean(dim=1)
+        average_underage_costs = observation['underage_costs'].mean(dim=1)
+        average_procurement_costs = observation['procurement_costs'].mean(dim=1)
 
         return observation, base_costs
     
@@ -287,13 +299,11 @@ class HybridSimulator(Simulator):
     # Cost calculation methods
     def _calculate_fixed_ordering_costs(self, observation, action_dict):
         """Calculate fixed ordering costs"""
-        # remember to detach and clone the feature_probs!!
         feature_probs = action_dict['feature_actions']['fixed_ordering_cost']['range_probs']
         feature_values = action_dict['feature_actions']['fixed_ordering_cost']['values']
         
         fixed_costs = (feature_probs * feature_values.unsqueeze(0)).sum(dim=(-1, -2))
-        # return fixed_costs
-        return fixed_costs.detach().clone()
+        return fixed_costs
     
     def _calculate_bulk_discount_costs(self, observation, action_dict):
         """Calculate bulk discount costs"""

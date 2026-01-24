@@ -30,7 +30,14 @@ class Trainer():
         self.all_test_losses = [] 
         self.device = device
         self.time_stamp = self.get_time_stamp()
-        self.best_performance_data = {'train_loss': np.inf, 'dev_loss': np.inf, 'last_epoch_saved': -1000, 'model_params_to_save': None}
+        self.best_performance_data = {
+            'train_loss': np.inf,
+            'dev_loss': np.inf,
+            'last_epoch_saved': -1000,
+            'model_params_to_save': None,
+            'optimizer_state_to_save': None,
+            'best_epoch': None
+        }
         self.logger = None  # Initialize logger as None
     
     def reset(self):
@@ -150,6 +157,14 @@ class Trainer():
                             dev_loss=dev_metrics['loss/reported'],
                             normalize_by_mean_demand=normalize_by_mean
                         )
+                    
+                    # Generate and log inventory ordering heatmap (if enabled in config)
+                    if logging_params.get('log_inventory_ordering_heatmap', False):
+                        self.log_inventory_ordering_heatmap(
+                            dev_metrics['trajectory_data'],
+                            epoch,
+                            dev_loss=dev_metrics['loss/reported']
+                        )
                 
                 self.logger.flush_metrics()
             
@@ -254,6 +269,9 @@ class Trainer():
             'pre_temp_logits': []
         }
 
+        if train and model.trainable and hasattr(optimizer_wrapper, 'on_epoch_start'):
+            optimizer_wrapper.on_epoch_start()
+
         for i, data_batch in enumerate(data_loader):
             data_batch = self.move_batch_to_device(data_batch)
             
@@ -338,6 +356,9 @@ class Trainer():
         # Include trajectory data in metrics for visualization
         if not train and trajectory_data is not None:
             metrics['trajectory_data'] = trajectory_data
+
+        if train and model.trainable and hasattr(optimizer_wrapper, 'on_epoch_end'):
+            optimizer_wrapper.on_epoch_end()
 
         if return_trajectory:
             if collect_additional_data:
@@ -634,9 +655,11 @@ class Trainer():
         if data_for_compare[trainer_params['choose_best_model_on']] < self.best_performance_data[trainer_params['choose_best_model_on']]:  
             self.best_performance_data['train_loss'] = train_loss
             self.best_performance_data['dev_loss'] = dev_loss
+            self.best_performance_data['best_epoch'] = epoch
             if model.trainable:
                 # Save the entire model's state dict instead of just the policy
                 self.best_performance_data['model_params_to_save'] = copy.deepcopy(model.state_dict())
+                self.best_performance_data['optimizer_state_to_save'] = copy.deepcopy(optimizer.state_dict())
             self.best_performance_data['update'] = True
 
         if trainer_params['save_model'] and model.policy.trainable:
@@ -881,8 +904,9 @@ class Trainer():
             
             # Handle different tensor shapes
             if len(inventory_tensor.shape) >= 3:
-                if inventory_tensor.shape[2] > 1:
-                    raise NotImplementedError("Plot for multi-store is not implemented")
+                if inventory_tensor.shape[2] > 1: # if we have multiple stores, we need to plot the inventory and action for the first store
+                    inventory_tensor = inventory_tensor[:, :, :1]
+                    action_tensor = action_tensor[:, :, :1]
                 T, B = inventory_tensor.shape[0], inventory_tensor.shape[1]
                 # Sum across all remaining dimensions to get total inventory per sample
                 if len(inventory_tensor.shape) > 3:
@@ -1208,7 +1232,6 @@ class Trainer():
             else:
                 discrete_logits_tensor = trajectory_data["discrete_logits"]
             
-            print(f"DEBUG: inventory_tensor.shape = {inventory_tensor.shape}")
             # Handle different tensor shapes
             if len(inventory_tensor.shape) >= 3:
                 T, B = inventory_tensor.shape[0], inventory_tensor.shape[1]
@@ -1300,4 +1323,138 @@ class Trainer():
             print(f"Error generating inventory-discrete action 0 probability plot: {e}")
             import traceback
             traceback.print_exc()
-
+            
+    def log_inventory_ordering_heatmap(self, trajectory_data, epoch, dev_loss=None, store_0=0, store_1=1):
+        """
+        Generate and log a heatmap showing the probability of ordering as a function of 
+        inventory levels at two stores.
+        
+        Args:
+            trajectory_data: Dictionary containing trajectory information
+            epoch: Current epoch number
+            dev_loss: Optional dev loss to include in the title
+            store_0: Index of first store for x-axis (default: 0)
+            store_1: Index of second store for y-axis (default: 1)
+        """
+        try:
+            if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
+                return
+            
+            # Check if we have the necessary data
+            if ("store_inventories" not in trajectory_data or 
+                "discrete_logits" not in trajectory_data or
+                len(trajectory_data["discrete_logits"]) == 0):
+                print("Missing required data for inventory ordering heatmap")
+                return
+            
+            # Handle both list and tensor cases
+            if isinstance(trajectory_data["store_inventories"], list):
+                inventory_tensor = torch.stack(trajectory_data["store_inventories"], dim=0)
+            else:
+                inventory_tensor = trajectory_data["store_inventories"]
+            
+            if isinstance(trajectory_data["discrete_logits"], list):
+                discrete_logits_tensor = torch.stack(trajectory_data["discrete_logits"], dim=0)
+            else:
+                discrete_logits_tensor = trajectory_data["discrete_logits"]
+            
+            print(f"DEBUG: inventory_tensor.shape = {inventory_tensor.shape}")
+            
+            # Handle different tensor shapes - need original multi-store data
+            if len(inventory_tensor.shape) >= 3:
+                T, B = inventory_tensor.shape[0], inventory_tensor.shape[1]
+                # If it's already been summed/reduced, we need the original data
+                if inventory_tensor.shape[2] == 1:
+                    print("Inventory has already been summed across stores. Cannot create 2D heatmap.")
+                    print("This plot requires per-store inventory data (shape should be [T, B, n_stores] with n_stores >= 2)")
+                    return
+                n_stores = inventory_tensor.shape[2]
+            else:
+                print(f"ERROR: Unexpected tensor shape: {inventory_tensor.shape}")
+                return
+            
+            # Check if we have enough stores
+            if n_stores < 2:
+                print(f"Need at least 2 stores for 2D heatmap, but only have {n_stores}")
+                return
+            
+            if store_0 >= n_stores or store_1 >= n_stores:
+                print(f"Store indices ({store_0}, {store_1}) out of range for {n_stores} stores")
+                return
+            
+            # Flatten time and batch: [T*B, n_stores] and [T*B, n_actions]
+            inventories_flat = inventory_tensor.reshape(-1, n_stores).detach().cpu()
+            discrete_logits_flat = discrete_logits_tensor.reshape(-1, discrete_logits_tensor.shape[-1]).detach().cpu()
+            
+            # Extract inventory for the two stores and round to nearest integer
+            inv_store_0 = torch.round(inventories_flat[:, store_0]).numpy().astype(int)
+            inv_store_1 = torch.round(inventories_flat[:, store_1]).numpy().astype(int)
+            
+            # Compute probabilities and extract ordering probability (action index 1)
+            discrete_probs = torch.softmax(discrete_logits_flat, dim=-1)
+            ordering_probs = discrete_probs[:, 1].numpy()
+            
+            # Create bins for the heatmap
+            min_inv_0, max_inv_0 = inv_store_0.min(), inv_store_0.max()
+            min_inv_1, max_inv_1 = inv_store_1.min(), inv_store_1.max()
+            
+            # Create grid
+            x_bins = np.arange(min_inv_0, max_inv_0 + 2)  # +2 to include max
+            y_bins = np.arange(min_inv_1, max_inv_1 + 2)
+            
+            # Initialize arrays to accumulate probabilities and counts
+            prob_sum = np.zeros((len(y_bins) - 1, len(x_bins) - 1))
+            counts = np.zeros((len(y_bins) - 1, len(x_bins) - 1))
+            
+            # Accumulate probabilities for each bucket
+            for i in range(len(inv_store_0)):
+                x_idx = np.searchsorted(x_bins, inv_store_0[i], side='right') - 1
+                y_idx = np.searchsorted(y_bins, inv_store_1[i], side='right') - 1
+                
+                # Ensure indices are within bounds
+                if 0 <= x_idx < len(x_bins) - 1 and 0 <= y_idx < len(y_bins) - 1:
+                    prob_sum[y_idx, x_idx] += ordering_probs[i]
+                    counts[y_idx, x_idx] += 1
+            
+            # Compute average probability for each bucket
+            avg_probs = np.divide(prob_sum, counts, where=counts > 0, out=np.full_like(prob_sum, np.nan))
+            
+            # Create the heatmap
+            fig, ax = plt.subplots(figsize=(14, 10))
+            
+            # Use imshow for heatmap
+            im = ax.imshow(avg_probs, origin='lower', aspect='auto', 
+                        extent=[min_inv_0, max_inv_0 + 1, min_inv_1, max_inv_1 + 1],
+                        cmap='RdYlBu_r', vmin=0, vmax=1, interpolation='nearest')
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Probability of Ordering (Action 1)', fontsize=14)
+            
+            # Set labels and title
+            title = f'Ordering Probability Heatmap (Epoch {epoch})'
+            if dev_loss is not None:
+                title += f' - Dev Loss: {dev_loss:.4f}'
+            ax.set_title(title, fontsize=18)
+            ax.set_xlabel(f'Inventory at Store {store_0} (x₁)', fontsize=16)
+            ax.set_ylabel(f'Inventory at Store {store_1} (x₂)', fontsize=16)
+            
+            # Add grid
+            ax.grid(True, alpha=0.3, color='white', linewidth=0.5)
+            
+            plt.tight_layout()
+            
+            # Convert plot to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            img = Image.open(buf)
+            
+            self.logger.current_metrics['inventory_ordering_heatmap'] = wandb.Image(img)
+            plt.close()
+            
+            
+        except Exception as e:
+            print(f"Error generating inventory ordering heatmap: {e}")
+            import traceback
+            traceback.print_exc()

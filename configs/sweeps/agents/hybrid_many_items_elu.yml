@@ -1,0 +1,80 @@
+# Hybrid Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/hybrid_many_items.yml'
+
+method: 'random'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  anneal_lr:
+    values:
+      - false  # Fixed: 60% of top performers used false
+  buffer_periods:
+    values:
+      - 20  # Fixed: median of top performers
+      - 30
+  clip_coef:
+    values:
+      - 0.16  # Fixed: median of top performers
+  gae_lambda:
+    values:
+      - 0.98
+  gamma:
+    values:
+      - 0.995
+  learning_rate:
+    distribution: log_uniform_values
+    max: 0.001
+    min: 0.0001
+  max_grad_norm:
+    distribution: log_uniform_values
+    max: 2.0
+    min: 0.1
+  normalize_advantages:
+    values:
+      - true
+  normalize_observations:
+    values:
+      - false
+  num_epochs:
+    values:
+      - 5  # Fixed: median of top performers
+      - 3
+      - 1
+  disable_cross_term:
+    values:
+      - true
+      - false
+  pathwise_coef:
+    distribution: log_uniform_values
+    max: 5.0
+    min: 0.5
+  policy_activation:
+    values:
+      - ELU
+  reward_scaling:
+    values:
+      - true
+  reward_scaling_pathwise:
+    values:
+      - true
+  use_gae:
+    values:
+      - true
+  value_activation:
+    values: 
+      - Tanh
+  value_function_coef:
+    values:
+      - 0.13  # Fixed: median of top performers
+  continuous_scale:
+    values:
+      - 1.0
+  continuous_shift:
+    values: 
+      - 5.0  # Fixed: median of top performers (changed from 1.0 to 1)
+  use_wandb:
+    values:
+      - true

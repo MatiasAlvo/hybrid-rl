@@ -17,6 +17,8 @@ class FeatureRegistry:
         self.config = config
         self.range_manager = range_manager
         self.network_dims = self._get_network_dimensions()
+        self.n_stores = self.range_manager.n_stores
+        self.n_sub_ranges = self.range_manager.n_sub_ranges
         
         # Setup feature processing (for future PPO use)
         self.state_features = self._setup_state_features()
@@ -53,6 +55,26 @@ class FeatureRegistry:
     def get_network_dimensions(self):
         """Return network dimensions"""
         return self.network_dims
+    
+    def reshape_continuous_output(self, raw_continuous_samples):
+        """
+        Reshape continuous output from [batch, 1, n_stores * n_sub_ranges] or [batch, n_stores * n_sub_ranges] 
+        to [batch, n_stores, n_sub_ranges]
+        """
+        if raw_continuous_samples is None:
+            return None
+        
+        batch_size = raw_continuous_samples.shape[0]
+        
+        if raw_continuous_samples.dim() == 3:
+            # Shape is [batch, 1, n_stores * n_sub_ranges], take first slice and reshape
+            return raw_continuous_samples[:, 0, :].reshape(batch_size, self.n_stores, self.n_sub_ranges)
+        elif raw_continuous_samples.dim() == 2:
+            # Shape is [batch, n_stores * n_sub_ranges], just reshape
+            return raw_continuous_samples.reshape(batch_size, self.n_stores, self.n_sub_ranges)
+        else:
+            # Already in correct shape [batch, n_stores, n_sub_ranges] or unexpected shape
+            return raw_continuous_samples
     
     def get_simulator_config(self):
         """Return simulator configuration"""
@@ -314,12 +336,21 @@ class FeatureRegistry:
             # If random_continuous is True and we have mean/std, override with sampled values
             if random_continuous and 'continuous_mean' in raw_outputs and 'continuous_log_std' in raw_outputs:
                 continuous_mean = raw_outputs['continuous_mean']
-                continuous_log_std = torch.clamp(raw_outputs['continuous_log_std'], min=-20, max=2)
+                continuous_log_std = raw_outputs['continuous_log_std']
+                
+                # Reshape mean and log_std before processing
+                continuous_mean = self.reshape_continuous_output(continuous_mean)
+                continuous_log_std = self.reshape_continuous_output(continuous_log_std)
+                
+                continuous_log_std = torch.clamp(continuous_log_std, min=-20, max=2)
                 continuous_std = torch.exp(continuous_log_std)
                 
                 # Sample from the Gaussian distribution - ensure all tensors are on the same device
                 epsilon = torch.randn_like(continuous_mean, device=continuous_mean.device)
                 raw_continuous_samples = continuous_mean + continuous_std * epsilon
+            else:
+                # Reshape continuous output from [batch, 1, n_stores * n_sub_ranges] to [batch, n_stores, n_sub_ranges]
+                raw_continuous_samples = self.reshape_continuous_output(raw_continuous_samples)
             
             # Process the continuous values
             continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
@@ -370,8 +401,19 @@ class FeatureRegistry:
         raw_continuous_samples = raw_continuous
         continuous_log_probs = None
         
+        # Reshape continuous output from [batch, 1, n_stores * n_sub_ranges] to [batch, n_stores, n_sub_ranges]
+        # Do this before Gaussian sampling if needed
+        if raw_continuous_samples is not None:
+            raw_continuous_samples = self.reshape_continuous_output(raw_continuous_samples)
+        
         # If using Gaussian policy, sample from the distribution
         if random_continuous and continuous_mean is not None and continuous_log_std is not None:
+            # Reshape mean and log_std if they haven't been reshaped yet
+            if continuous_mean.dim() == 3 and continuous_mean.shape[1] == 1:
+                continuous_mean = self.reshape_continuous_output(continuous_mean)
+            if continuous_log_std.dim() == 3 and continuous_log_std.shape[1] == 1:
+                continuous_log_std = self.reshape_continuous_output(continuous_log_std)
+            
             # Clamp log_std for numerical stability
             continuous_log_std = torch.clamp(continuous_log_std, min=-20, max=2)
             continuous_std = torch.exp(continuous_log_std)
@@ -382,22 +424,21 @@ class FeatureRegistry:
             
             # Calculate log probabilities for the sampled actions
             normal_dist = torch.distributions.Normal(continuous_mean, continuous_std)
-            continuous_log_probs = normal_dist.log_prob(raw_continuous_samples)  # [batch, n_discrete, n_continuous]
+            continuous_log_probs = normal_dist.log_prob(raw_continuous_samples)  # [batch, n_stores, n_sub_ranges]
             
             # If discrete_action_indices is provided, get log probs for selected actions
             if discrete_action_indices is not None:
-                # Reshape indices for gathering
-                gather_indices = discrete_action_indices.unsqueeze(-1).expand(-1, -1, continuous_log_probs.size(-1))
+                # Note: discrete_action_indices is [batch, n_stores], continuous_log_probs is [batch, n_stores, n_sub_ranges]
+                # We need to gather along the n_sub_ranges dimension
+                gather_indices = discrete_action_indices.unsqueeze(-1)  # [batch, n_stores, 1]
                 
                 # Get log probs for selected discrete actions
-                selected_continuous_log_probs = continuous_log_probs.gather(1, gather_indices)
+                selected_continuous_log_probs = continuous_log_probs.gather(-1, gather_indices).squeeze(-1)  # [batch, n_stores]
                 
-                # Sum log probs across continuous dimensions
-                continuous_log_probs = selected_continuous_log_probs.sum(dim=-1)
+                # Sum log probs across continuous dimensions (n_sub_ranges)
+                continuous_log_probs = selected_continuous_log_probs.sum(dim=-1)  # [batch]
         
         # Process the continuous values through range scaling
-        raw_continuous_samples = raw_continuous_samples
-        # raw_continuous_samples = raw_continuous_samples + 37.0
         continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
         continuous_values = self.range_manager.scale_continuous_by_ranges(
             continuous_values,

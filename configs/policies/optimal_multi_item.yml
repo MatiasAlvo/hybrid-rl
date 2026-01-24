@@ -15,7 +15,7 @@ logging_params:
   use_tensorboard: false
   wandb_project_name: inventory_control
   wandb_entity: alvomatias
-  exp_name: hybrid
+  exp_name: optimal_multi_item
   env_name: inventory
   setting_name: one_store_fixed_costs
   # setting_name: one_store_multi_lead_time_lost
@@ -26,7 +26,7 @@ logging_params:
   normalize_plots_by_mean_demand: false
 
 agent_params:
-  agent_type: hybrid
+  agent_type: optimal_multi_item
   initial_temperature: 1.0
   min_temperature: 0.001
   temperature_decay: 0.997
@@ -34,8 +34,8 @@ agent_params:
   add_gumbel_noise: false
 
 optimizer_params:
-  # learning_rate: 0.01  # Overridden by sweep config
-  learning_rate: 0.003  # Overridden by sweep config
+  learning_rate: 0.01  # Overridden by sweep config
+  # learning_rate: 0.003  # Overridden by sweep config
   anneal_lr: false  # Overridden by sweep config
   weight_decay: 0.0
   lr_multipliers:
@@ -46,7 +46,7 @@ optimizer_params:
     other: 1.0
   ppo_params:
     clip_coef: 0.16  # Overridden by sweep config
-    gamma: 0.93  # Overridden by sweep config
+    gamma: 0.995  # Overridden by sweep config
     gae_lambda: 0.96  # Overridden by sweep config
     normalize_advantages: true  # Overridden by sweep config
     use_gae: true  # Overridden by sweep config

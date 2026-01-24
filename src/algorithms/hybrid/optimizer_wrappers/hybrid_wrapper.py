@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,10 +12,12 @@ import torch.nn.functional as F
 
 class BaseOptimizerWrapper:
     """Base optimizer wrapper with all possible optimization methods"""
-    def __init__(self, model, optimizer, device='cpu'):
+    def __init__(self, model, optimizer, problem_params, device='cpu'):
         self.model = model
         self.optimizer = optimizer
         self.device = device
+        self.problem_params = problem_params
+        self.n_stores = problem_params['n_stores']
     
     def compute_policy_loss(self, log_probs, advantages):
         """Policy gradient loss"""
@@ -37,20 +40,107 @@ class BaseOptimizerWrapper:
         raise NotImplementedError 
 
 class HybridWrapper(BaseOptimizerWrapper):
-    def __init__(self, model, optimizer, device='cpu', ppo_params=None):
-        super().__init__(model, optimizer, device)
+    def __init__(self, model, optimizer, problem_params, device='cpu', ppo_params=None):
+        super().__init__(model, optimizer, problem_params, device)
         self.ppo_params = ppo_params or {}  # Use empty dict if no params provided
-        # self.epoch_count = 0
         
         # Get required losses from the model
-        self.required_losses = model.required_losses
+        self.base_required_losses = copy.deepcopy(model.required_losses)
+        self.required_losses = copy.deepcopy(self.base_required_losses)
+
+        self.disable_cross_term = self.ppo_params.get('disable_cross_term', False)
+        if self.disable_cross_term:
+            print("🔒 Disabling cross-term in policy loss")
+        else:
+            print("🔓 Enabling cross-term in policy loss")
+        
+        # Optional loss schedule for alternating optimization phases
+        self.loss_schedule = self._init_loss_schedule(self.ppo_params.get('loss_schedule'))
+        self.epoch_count = 0
+        if self.loss_schedule is not None:
+            self._set_required_losses_for_epoch(self.epoch_count)
         
         # Debug flag for freezing backbone (easy to toggle)
-        self.freeze_backbone = True
+        self.freeze_backbone = False
         
         # Automatically freeze backbone if flag is set
         if self.freeze_backbone:
             self.freeze_backbone_params()
+
+    def _init_loss_schedule(self, loss_schedule):
+        """Validate and normalize optional loss schedule configuration."""
+        if not loss_schedule:
+            return None
+        
+        if not isinstance(loss_schedule, dict):
+            raise ValueError("loss_schedule must be a dict with 'policy_value' and 'pathwise' keys")
+        
+        policy_epochs = int(loss_schedule.get('policy_value', 0))
+        pathwise_epochs = int(loss_schedule.get('pathwise', 0))
+        start_phase = loss_schedule.get('start_phase', 'policy_value')
+        warmup_policy_value_epochs = int(loss_schedule.get('warmup_policy_value_epochs', 0))
+        
+        if policy_epochs < 0 or pathwise_epochs < 0 or warmup_policy_value_epochs < 0:
+            raise ValueError("loss_schedule epoch counts must be >= 0")
+        
+        if policy_epochs == 0 and pathwise_epochs == 0:
+            return None
+        
+        if start_phase not in ('policy_value', 'pathwise'):
+            raise ValueError("loss_schedule start_phase must be 'policy_value' or 'pathwise'")
+        
+        return {
+            'policy_value': policy_epochs,
+            'pathwise': pathwise_epochs,
+            'start_phase': start_phase,
+            'warmup_policy_value_epochs': warmup_policy_value_epochs
+        }
+    
+    def _set_required_losses_for_epoch(self, epoch):
+        """Set required_losses for the given epoch based on the schedule."""
+        if self.loss_schedule is None:
+            return
+        
+        policy_epochs = self.loss_schedule['policy_value']
+        pathwise_epochs = self.loss_schedule['pathwise']
+        start_phase = self.loss_schedule['start_phase']
+        warmup_policy_value_epochs = self.loss_schedule['warmup_policy_value_epochs']
+        
+        if epoch < warmup_policy_value_epochs:
+            phase = 'policy_value'
+        elif policy_epochs == 0:
+            phase = 'pathwise'
+        elif pathwise_epochs == 0:
+            phase = 'policy_value'
+        else:
+            cycle = policy_epochs + pathwise_epochs
+            offset = (epoch - warmup_policy_value_epochs) % cycle
+            if start_phase == 'policy_value':
+                phase = 'policy_value' if offset < policy_epochs else 'pathwise'
+            else:
+                phase = 'pathwise' if offset < pathwise_epochs else 'policy_value'
+        
+        required = copy.deepcopy(self.base_required_losses)
+        if phase == 'policy_value':
+            required['pathwise'] = False
+        else:
+            required['policy_gradient'] = False
+            required['value'] = False
+            required['entropy'] = False
+        
+        self.required_losses = required
+
+    def on_epoch_start(self):
+        """Update loss schedule at the start of an epoch."""
+        if self.loss_schedule is None:
+            return
+        self._set_required_losses_for_epoch(self.epoch_count)
+    
+    def on_epoch_end(self):
+        """Advance loss schedule at the end of an epoch."""
+        if self.loss_schedule is None:
+            return
+        self.epoch_count += 1
 
     def freeze_backbone_params(self):
         """Freeze backbone parameters for debugging - easy to undo"""
@@ -70,7 +160,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         else:
             print(f"✅ Successfully frozen backbone parameters")
         
-        self.freeze_backbone = True
+        self.freeze_backbone = False
 
     def unfreeze_backbone_params(self):
         """Unfreeze backbone parameters - easy to undo the debugging"""
@@ -93,9 +183,13 @@ class HybridWrapper(BaseOptimizerWrapper):
         trajectory_data = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                           for k, v in trajectory_data.items()}
 
-        # detach the observations
-        trajectory_data['observations'] = trajectory_data['observations'].detach().clone()
-        # trajectory_data['observations'] = trajectory_data['observations']
+        # if disable_cross_term is True, we detach the observations
+        # this effectively disables the cross-term in the policy loss
+        # thus, continuous parameters dont get a gradient from the policy loss
+        if self.disable_cross_term:
+            trajectory_data['observations'] = trajectory_data['observations'].detach().clone()
+        else:
+            trajectory_data['observations'] = trajectory_data['observations']
         # flip the sign of the rewards
         trajectory_data['rewards'] = -trajectory_data['rewards']
 
@@ -522,7 +616,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         return mb_data
 
-    def _compute_losses(self, mb_data, processed_data, epoch):
+    def _compute_losses(self, mb_data, processed_data, epoch , normalize_by_stores=True):
         """Compute all loss components for the current minibatch."""
         required_losses = processed_data['required_losses']
         
@@ -571,7 +665,6 @@ class HybridWrapper(BaseOptimizerWrapper):
             clip_coef = processed_data['clip_coef']
             pg_loss1 = mb_advantages * ratio
             pg_loss2 = mb_advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-            # policy_loss = torch.max(pg_loss1, pg_loss2).mean()
             policy_loss = -torch.min(pg_loss1, pg_loss2).mean()
             
             # Compute clipping fraction for diagnostics
@@ -593,6 +686,8 @@ class HybridWrapper(BaseOptimizerWrapper):
                 res_squared = res ** 2
                 value_loss = 0.5 * ((newvalue.squeeze() - mb_data['returns'].detach()) ** 2).mean()
             value_loss = processed_data['vf_coef'] * value_loss
+            if normalize_by_stores:
+                value_loss = value_loss / self.n_stores
         
         # Compute entropy loss if needed
         raw_entropy = None
@@ -606,6 +701,8 @@ class HybridWrapper(BaseOptimizerWrapper):
             pathwise_rewards_slice = processed_data['pathwise_rewards'][processed_data['effective_slice']]
             pathwise_loss = - pathwise_rewards_slice.mean()
             pathwise_loss = processed_data['pathwise_coef'] * pathwise_loss
+            if normalize_by_stores:
+                pathwise_loss = pathwise_loss / self.n_stores
         
         return policy_loss, value_loss, entropy_loss, pathwise_loss, metrics, raw_entropy
 

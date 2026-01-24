@@ -26,7 +26,7 @@ logging_params:
   normalize_plots_by_mean_demand: false
 
 agent_params:
-  agent_type: hybrid
+  agent_type: alternate_hybrid
   initial_temperature: 1.0
   min_temperature: 0.001
   temperature_decay: 0.997
@@ -46,7 +46,7 @@ optimizer_params:
     other: 1.0
   ppo_params:
     clip_coef: 0.16  # Overridden by sweep config
-    gamma: 0.93  # Overridden by sweep config
+    gamma: 0.995  # Overridden by sweep config
     gae_lambda: 0.96  # Overridden by sweep config
     normalize_advantages: true  # Overridden by sweep config
     use_gae: true  # Overridden by sweep config
@@ -59,6 +59,12 @@ optimizer_params:
     max_grad_norm: 5.0  # Overridden by sweep config
     entropy_coef: 0.0
     clip_by_component: true
+    disable_cross_term: true
+    loss_schedule:
+      warmup_policy_value_epochs: 10
+      policy_value: 3
+      pathwise: 3
+      start_phase: policy_value
 
 nn_params:
   policy_network:
@@ -91,3 +97,4 @@ nn_params:
     dropout: 0.0
     batch_norm: false
     output_size: 1
+

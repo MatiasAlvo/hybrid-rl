@@ -2,12 +2,28 @@ import wandb
 import yaml
 import os
 import torch
-import ray
 import logging
 import time
 import tempfile
+import json
+import fcntl
 from typing import List, Optional
 from main_run import run_training
+
+# Only import ray if needed (for agent runs)
+try:
+    import ray
+    RAY_AVAILABLE = True
+except ImportError:
+    RAY_AVAILABLE = False
+    # Create a dummy ray module for the decorator
+    class DummyRay:
+        @staticmethod
+        def remote(*args, **kwargs):
+            def decorator(cls):
+                return cls
+            return decorator
+    ray = DummyRay()
 
 # Set up logging
 logging.basicConfig(
@@ -27,7 +43,112 @@ def load_sweep_id(filename='sweep_id.txt'):
             return f.read().strip()
     return None
 
-@ray.remote(num_gpus=1)  # Explicitly request 1 GPU for each worker
+def _load_top_k_metadata(metadata_path):
+    if not os.path.exists(metadata_path):
+        return {'entries': []}
+    with open(metadata_path, 'r') as f:
+        return json.load(f)
+
+def _save_top_k_metadata(metadata_path, data):
+    with open(metadata_path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def _atomic_top_k_update(lock_path, update_fn):
+    """Lock using flock to safely update top-k metadata across processes."""
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    with open(lock_path, 'w') as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        update_fn()
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+def update_sweep_top_k(
+    base_dir,
+    sweep_id,
+    setting_name,
+    policy_name,
+    run_id,
+    best_dev_loss,
+    best_train_loss,
+    best_epoch,
+    model_state_dict,
+    optimizer_state_dict,
+    top_k,
+    extra_metadata=None
+):
+    if top_k is None or top_k <= 0:
+        return
+    if model_state_dict is None:
+        logging.warning("No model state to save for top-k sweep tracking.")
+        return
+
+    sweep_label = sweep_id or "no_sweep"
+    top_k_dir = os.path.join(base_dir, "sweep_top_k", sweep_label, setting_name, policy_name)
+    os.makedirs(top_k_dir, exist_ok=True)
+
+    metadata_path = os.path.join(top_k_dir, "top_k_runs.json")
+    lock_path = os.path.join(top_k_dir, ".top_k.lock")
+
+    def _update():
+        metadata = _load_top_k_metadata(metadata_path)
+        entries = metadata.get('entries', [])
+
+        # Remove any existing entry for this run (we'll re-evaluate)
+        entries = [e for e in entries if e.get('run_id') != run_id]
+
+        worst_loss = max([e['best_dev_loss'] for e in entries], default=None)
+        is_candidate = (len(entries) < top_k) or (worst_loss is not None and best_dev_loss < worst_loss)
+
+        if not is_candidate:
+            metadata['entries'] = sorted(entries, key=lambda x: x['best_dev_loss'])
+            _save_top_k_metadata(metadata_path, metadata)
+            return
+
+        filename = f"run_{run_id}_dev_{best_dev_loss:.6f}.pt"
+        checkpoint_path = os.path.join(top_k_dir, filename)
+
+        checkpoint = {
+            'epoch': best_epoch,
+            'model_state_dict': model_state_dict,
+            'optimizer_state_dict': optimizer_state_dict,
+            'best_dev_loss': best_dev_loss,
+            'best_train_loss': best_train_loss,
+            'run_id': run_id,
+            'sweep_id': sweep_id
+        }
+        if extra_metadata:
+            checkpoint['metadata'] = extra_metadata
+
+        torch.save(checkpoint, checkpoint_path)
+
+        entries.append({
+            'run_id': run_id,
+            'best_dev_loss': best_dev_loss,
+            'best_train_loss': best_train_loss,
+            'best_epoch': best_epoch,
+            'checkpoint_path': checkpoint_path
+        })
+
+        entries = sorted(entries, key=lambda x: x['best_dev_loss'])
+        while len(entries) > top_k:
+            removed = entries.pop()
+            old_path = removed.get('checkpoint_path')
+            if old_path and os.path.exists(old_path):
+                os.remove(old_path)
+
+        metadata['entries'] = entries
+        _save_top_k_metadata(metadata_path, metadata)
+
+    _atomic_top_k_update(lock_path, _update)
+
+# Decorator for ray (only used when running agents)
+if RAY_AVAILABLE:
+    TrainingWorkerDecorator = ray.remote(num_gpus=1)
+else:
+    # Dummy decorator if ray is not available
+    def TrainingWorkerDecorator(cls):
+        return cls
+
+@TrainingWorkerDecorator
 class TrainingWorker:
     def __init__(self, gpu_id: int):
         """Initialize worker with specific GPU"""
@@ -117,6 +238,8 @@ def train_sweep(sweep_config):
                 'reward_scaling_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling_pathwise']),
                 'max_grad_norm': ('hyperparams', ['optimizer_params', 'ppo_params', 'max_grad_norm']),
                 'entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'entropy_coef']),
+                'loss_schedule_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'loss_schedule', 'pathwise']),
+                'disable_cross_term': ('hyperparams', ['optimizer_params', 'ppo_params', 'disable_cross_term']),
                 # Unified temperature parameters
                 'initial_temperature': ('hyperparams', ['agent_params', 'initial_temperature']),
                 'min_temperature': ('hyperparams', ['agent_params', 'min_temperature']),
@@ -145,7 +268,8 @@ def train_sweep(sweep_config):
                     for i, key in enumerate(param_path[:-1]):
                         if isinstance(current, dict):
                             if key not in current:
-                                current[key] = {} if i < len(param_path) - 2 else []
+                                next_key = param_path[i + 1]
+                                current[key] = {} if isinstance(next_key, str) else []
                             current = current[key]
                         elif isinstance(current, list):
                             # Ensure list is long enough
@@ -178,7 +302,37 @@ def train_sweep(sweep_config):
             ]
 
             # Run training
-            train_metrics, dev_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode='both')
+            train_metrics, dev_metrics, test_metrics, best_performance = run_training(
+                setting_config,
+                hyperparams_config,
+                mode='both',
+                return_best_state=True
+            )
+
+            # Save top-k sweep runs by best dev loss (if configured)
+            trainer_params = hyperparams_config.get('trainer_params', {})
+            top_k = trainer_params.get('sweep_top_k', 0)
+            base_dir = trainer_params.get('base_dir', 'models/saved_models')
+            setting_name = setting_config.get('problem_params', {}).get('setting_name', 'unknown_setting')
+            policy_name = hyperparams_config.get('nn_params', {}).get('policy_network', {}).get('name', 'unknown_policy')
+
+            update_sweep_top_k(
+                base_dir=base_dir,
+                sweep_id=run.sweep_id,
+                setting_name=setting_name,
+                policy_name=policy_name,
+                run_id=run.id,
+                best_dev_loss=best_performance.get('dev_loss', float('inf')),
+                best_train_loss=best_performance.get('train_loss', float('inf')),
+                best_epoch=best_performance.get('best_epoch'),
+                model_state_dict=best_performance.get('model_params_to_save'),
+                optimizer_state_dict=best_performance.get('optimizer_state_to_save'),
+                top_k=top_k,
+                extra_metadata={
+                    'config_files': config_files,
+                    'wandb_name': run.name
+                }
+            )
             
         except Exception as e:
             print(f"Sweep run failed with error: {str(e)}")

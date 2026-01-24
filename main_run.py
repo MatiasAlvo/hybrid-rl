@@ -25,7 +25,11 @@ from src.algorithms.hybrid.agents.hybrid_agent import (
     FactoredGumbelSoftmaxAgent,
     ContinuousOnlyAgent,
     FactoredGaussianPPOAgent,
-    FactoredHybridAgent
+    FactoredHybridAgent,
+    FixedDiscreteHybridAgent,
+    FixedContinuousHybridAgent,
+    OptimalMultiItem,
+    AlternateHybridAgent
 )
 
 # Data handling imports
@@ -147,7 +151,7 @@ def create_parameter_groups_with_lr(model, base_lr, lr_multipliers):
     
     return param_groups
 
-def run_training(setting_config, hyperparams_config, mode='both'):
+def run_training(setting_config, hyperparams_config, mode='both', return_best_state=False):
     """
     Run training and/or testing with given configurations
     Args:
@@ -284,7 +288,11 @@ def run_training(setting_config, hyperparams_config, mode='both'):
         'factored_gumbel_softmax': FactoredGumbelSoftmaxAgent,
         'continuous_only': ContinuousOnlyAgent,
         'factored_gaussian_ppo': FactoredGaussianPPOAgent,
-        'factored_hybrid': FactoredHybridAgent
+        'factored_hybrid': FactoredHybridAgent,
+        'fixed_discrete_hybrid': FixedDiscreteHybridAgent,
+        'fixed_continuous_hybrid': FixedContinuousHybridAgent,
+        'optimal_multi_item': OptimalMultiItem,
+        'alternate_hybrid': AlternateHybridAgent
     }
 
     # Get agent type from config, default to 'hybrid' if not specified
@@ -342,7 +350,7 @@ def run_training(setting_config, hyperparams_config, mode='both'):
         'ppo_params': optimizer_params.get('ppo_params', {})
     }
 
-    optimizer_wrapper = HybridWrapper(model, optimizer, device=device, **wrapper_params)
+    optimizer_wrapper = HybridWrapper(model, optimizer, problem_params, device=device, **wrapper_params)
 
     # Load previous model if specified
     if trainer_params['load_previous_model']:
@@ -352,8 +360,8 @@ def run_training(setting_config, hyperparams_config, mode='both'):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         print("Model loaded successfully")
         
-        # Zero out continuous parameters for debugging
-        zero_continuous_parameters(model)
+        # # Zero out continuous parameters for debugging
+        # zero_continuous_parameters(model)
 
     # Initialize simulator based on type
     simulator = (HybridSimulator(feature_registry, model=model, device=device) 
@@ -416,6 +424,8 @@ def run_training(setting_config, hyperparams_config, mode='both'):
     if trainer.logger is not None:
         trainer.logger.close()
     
+    if return_best_state:
+        return train_metrics, dev_metrics, test_metrics, trainer.best_performance_data
     return train_metrics, dev_metrics, test_metrics
 
 if __name__ == "__main__":
