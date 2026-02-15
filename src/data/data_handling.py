@@ -123,6 +123,7 @@ class Scenario():
         demand_generator_functions = {
             "normal": self.generate_normal_demand, 
             'poisson': self.generate_poisson_demand,
+            'negative_binomial': self.generate_negative_binomial_demand,
             'real': self.read_real_demand_data,
             }
 
@@ -219,6 +220,59 @@ class Scenario():
             # Single mean value for all stores
             return np.random.poisson(mean, size=(self.num_samples, problem_params['n_stores'], periods))
 
+    def generate_negative_binomial_demand(self, problem_params, demand_params, seed, periods):
+        """
+        Generate demand from negative binomial distribution.
+        Parameterized by mean and coefficient of variation (CV).
+        
+        For negative binomial: variance = mean + mean^2 / r
+        Where r is the dispersion parameter.
+        CV = sqrt(variance) / mean = sqrt(1/mean + 1/r)
+        Solving for r: r = mean / (CV^2 * mean - 1)
+        """
+        # Set seed
+        if seed is not None:
+            np.random.seed(seed)
+        
+        mean = demand_params['mean']
+        cv = demand_params['coef_of_var']
+        
+        # Handle per-store means (when mean is a list/array)
+        if isinstance(mean, (list, np.ndarray)) and len(mean) == problem_params['n_stores']:
+            # Generate demand for each store separately with its own mean
+            demand = np.zeros((self.num_samples, problem_params['n_stores'], periods))
+            for store_idx in range(problem_params['n_stores']):
+                store_mean = mean[store_idx]
+                # Calculate parameters for negative binomial
+                # variance = mean * (1 + mean * cv^2)
+                variance = store_mean * (1 + store_mean * cv**2)
+                # For negative binomial: variance = mean + mean^2/r
+                # Solving for r: r = mean^2 / (variance - mean)
+                r = store_mean**2 / (variance - store_mean)
+                p = r / (r + store_mean)
+                
+                # Generate negative binomial samples
+                demand[:, store_idx, :] = np.random.negative_binomial(
+                    n=r,
+                    p=p,
+                    size=(self.num_samples, periods)
+                )
+            print(demand.shape)
+            print(demand.mean())
+            print(demand[0])
+            return demand
+        else:
+            # Single mean value for all stores
+            variance = mean * (1 + mean * cv**2)
+            r = mean**2 / (variance - mean)
+            p = r / (r + mean)
+            
+            return np.random.negative_binomial(
+                n=r,
+                p=p,
+                size=(self.num_samples, problem_params['n_stores'], periods)
+            )
+    
     def generate_data(self, demand_params, **kwargs):
         """
         Generate demand data

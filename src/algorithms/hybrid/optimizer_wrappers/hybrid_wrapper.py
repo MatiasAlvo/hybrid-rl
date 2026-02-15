@@ -62,6 +62,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Debug flag for freezing backbone (easy to toggle)
         self.freeze_backbone = False
+        self._warned_no_store_norm = False
         
         # Automatically freeze backbone if flag is set
         if self.freeze_backbone:
@@ -619,6 +620,13 @@ class HybridWrapper(BaseOptimizerWrapper):
     def _compute_losses(self, mb_data, processed_data, epoch , normalize_by_stores=True):
         """Compute all loss components for the current minibatch."""
         required_losses = processed_data['required_losses']
+        
+        if not self._warned_no_store_norm:
+            if normalize_by_stores:
+                print(f"✅ Normalizing losses by number of stores (n_stores={self.n_stores})")
+            else:
+                print("⚠️  Not normalizing losses by number of stores")
+            self._warned_no_store_norm = True
         
         # Initialize losses and metrics
         policy_loss = torch.tensor(0.0, device=self.device)

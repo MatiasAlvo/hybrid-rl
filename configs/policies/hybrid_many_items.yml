@@ -1,5 +1,5 @@
 trainer_params:
-  epochs: 10
+  epochs: 200
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
@@ -12,7 +12,7 @@ trainer_params:
   sweep_top_k: 3
 
 logging_params:
-  use_wandb: true  # Overridden by sweep config
+  use_wandb: false  # Overridden by sweep config
   use_tensorboard: false
   wandb_project_name: inventory_control
   wandb_entity: alvomatias

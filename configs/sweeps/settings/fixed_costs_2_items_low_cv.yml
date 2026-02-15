@@ -1,6 +1,6 @@
 # Fixed Costs Many items Setting Sweep Configuration
 config_files:
-  setting: 'configs/settings/fixed_costs_2_items_base.yml'
+  setting: 'configs/settings/fixed_costs_2_items_low_cv.yml'
 
 parameters:
   normalize_observations:
