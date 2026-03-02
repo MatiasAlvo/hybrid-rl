@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_real_demand_v2.yml'
+  hyperparams: 'configs/policies/hybrid.yml'
 
 method: 'random'
 metric:
@@ -8,36 +8,36 @@ metric:
   goal: 'minimize'
 
 parameters:
-  add_gumbel_noise:
-    values:
-      - false
   anneal_lr:
     values:
-      - false
+      - false  # Fixed: 60% of top performers used false
   buffer_periods:
     values:
-      - 10
+      - 20  # Fixed: median of top performers
   clip_coef:
     values:
-      - 0.16
+      - 0.16  # Fixed: median of top performers
   fixed_cost:
     distribution: categorical
     values:
       - 64
   gae_lambda:
     values:
-      - 0.96
+      - 0.96  # Fixed: median of top performers
   gamma:
     values:
-      - 0.94
+      - 0.93  # Fixed: median of top performers
   learning_rate:
-    distribution: log_uniform_values
-    max: 0.01
-    min: 0.001
+    values:
+      - 0.003  # Fixed: median of top performers
   max_grad_norm:
     values:
-      - 5.0
+      - 5.0  # Fixed: median of top performers
   normalize_advantages:
+    values:
+      - true
+      - false
+  normalize_by_mean_demand:
     values:
       - true
       - false
@@ -46,20 +46,19 @@ parameters:
       - false
   num_epochs:
     values:
-      - 3
+      - 5  # Fixed: median of top performers
   pathwise_coef:
     values:
-      - 5.0
-      - 1.0
+      - 10.0  # Fixed: median of top performers
   policy_activation:
     values:
-      - ELU
+      - Tanh  # Fixed: 90% of top performers used Tanh
   reward_scaling:
     values:
-      - false
+      - true
   reward_scaling_pathwise:
     values:
-      - false
+      - true
   use_gae:
     values:
       - true
@@ -68,28 +67,13 @@ parameters:
       - Tanh
   value_function_coef:
     values:
-      - 0.14
+      - 0.13  # Fixed: median of top performers
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
-      - 0.0
-      - 1.0
-      - 5.0
-  normalize_by_mean_demand:
-    values:
-      - false
-  single_anchor_normalization:
-    values:
-      - true
-  single_anchor_reward_scaling:
-    values:
-      - true
-      - false
-  disable_cross_term:
-    values:
-      - false
+      - 5.0  # Fixed: median of top performers (changed from 1.0 to 1)
   use_wandb:
     values:
-      - true 
+      - true

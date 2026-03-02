@@ -105,7 +105,11 @@ class FeatureRegistry:
         if x is None:
             return None
         if target.dim() <= 2:
+            if x.dim() == 1 and target.dim() == 2:
+                return x.view(x.shape[0], 1).expand(-1, target.shape[1])
             return x
+        if x.dim() == 1:
+            x = x.view(x.shape[0], 1).expand(-1, target.shape[1])
         expand_dims = target.dim() - 2
         return x.view(x.shape[0], x.shape[1], *([1] * expand_dims))
 
@@ -115,8 +119,9 @@ class FeatureRegistry:
         """
         if past_demands is None:
             return
-        self._moving_mean = past_demands.mean(dim=2)
-        self._moving_variance = past_demands.var(dim=2, unbiased=False)
+        # Use a single scaler per trajectory (average across stores and history)
+        self._moving_mean = past_demands.mean(dim=(1, 2))
+        self._moving_variance = past_demands.var(dim=(1, 2), unbiased=False)
 
     def _update_ewma_stats(self, current_demand, beta):
         """
@@ -124,6 +129,9 @@ class FeatureRegistry:
         """
         if current_demand is None:
             return
+        # Use a single scaler per trajectory (average across stores)
+        if current_demand.dim() >= 2:
+            current_demand = current_demand.mean(dim=1)
         if not hasattr(self, '_moving_mean') or self._moving_mean is None:
             self._moving_mean = current_demand
             self._moving_variance = torch.zeros_like(current_demand)
@@ -131,19 +139,46 @@ class FeatureRegistry:
         diff = current_demand - self._moving_mean
         self._moving_variance = beta * self._moving_variance + (1.0 - beta) * diff.pow(2)
 
+    def _get_fixed_ordering_cost(self):
+        """
+        Extract fixed ordering cost K from discrete feature config, if available.
+        """
+        feature = None
+        if hasattr(self.range_manager, 'discrete_features'):
+            feature = self.range_manager.discrete_features.get('fixed_ordering_cost')
+        if not feature or 'values' not in feature or feature['values'] is None:
+            return None
+        values = feature['values']
+        if torch.is_tensor(values):
+            return float(values.max().item())
+        if isinstance(values, (list, tuple)) and values:
+            return float(max(values))
+        return None
+
     def _maybe_scale_activated_by_mean(self, activated_values):
         """
-        Multiply activated values by EWMA mean before range scaling.
+        Multiply activated values by anchor mean before range scaling.
+        Only applies to softplus (unbounded) ranges.
         """
         if activated_values is None:
             return None
-        if (not hasattr(self, '_moving_mean') or self._moving_mean is None or
-            not hasattr(self, '_moving_variance') or self._moving_variance is None):
+        if (not hasattr(self, '_moving_mean') or self._moving_mean is None):
             return activated_values
+        if not hasattr(self.range_manager, 'activation_types') or self.range_manager.activation_types is None:
+            return activated_values
+
         ewma_epsilon = getattr(self, '_ewma_epsilon', 1e-5)
         mean_denom = torch.clamp(self._moving_mean, min=ewma_epsilon)
         mean_expanded = self._expand_store_batch(mean_denom, activated_values)
-        return activated_values * mean_expanded
+        
+        # Scale only softplus ranges
+        mask = torch.tensor(
+            [1.0 if t == 'softplus' else 0.0 for t in self.range_manager.activation_types],
+            device=activated_values.device,
+            dtype=activated_values.dtype
+        ).view(1, 1, -1)
+        mask = mask.expand_as(activated_values)
+        return activated_values * (1.0 - mask) + activated_values * mean_expanded * mask
     
     def prepare_inputs(self, observation, update_ewma=True):
         """
@@ -161,6 +196,7 @@ class FeatureRegistry:
             # Get normalization setting from policy config
             policy_params = self.config.get('policy_network', {})
             normalize_by_mean_demand = policy_params.get('normalize_by_mean_demand', False)
+            single_anchor_normalization = policy_params.get('single_anchor_normalization', False)
             ewma_beta = policy_params.get('ewma_beta', 0.99)
             ewma_epsilon = 1e-5
             self._ewma_epsilon = ewma_epsilon
@@ -169,7 +205,23 @@ class FeatureRegistry:
             processed_obs = observation.copy()
             
             # Apply normalization if enabled
-            if normalize_by_mean_demand and 'past_demands' in observation:
+            if single_anchor_normalization and 'mean_demand' in observation:
+                moving_mean = observation['mean_demand']
+                self._moving_mean = moving_mean
+                self._moving_variance = torch.zeros_like(moving_mean)
+                mean_denom = torch.clamp(moving_mean, min=ewma_epsilon)
+
+                quantity_features = ['store_inventories', 'past_demands', 'past_arrivals', 'past_orders']
+                for feature_name in quantity_features:
+                    if feature_name in processed_obs:
+                        mean_expanded = self._expand_store_batch(mean_denom, processed_obs[feature_name])
+                        processed_obs[feature_name] = processed_obs[feature_name] / mean_expanded
+
+                # Expose moving mean as an optional input feature
+                if moving_mean is not None:
+                    processed_obs['moving_mean'] = moving_mean
+
+            elif normalize_by_mean_demand and 'past_demands' in observation:
                 past_demands = observation['past_demands']
                 current_period = observation['current_period']
                 if current_period == 0:
@@ -193,15 +245,20 @@ class FeatureRegistry:
                         processed_obs[feature_name] = processed_obs[feature_name] / mean_expanded
                 # Expose moving mean as an optional input feature
                 if moving_mean is not None:
+                    # Keep as scalar per trajectory (no per-store expansion)
                     processed_obs['moving_mean'] = moving_mean
             # Get observation keys from policy config
             observation_keys = policy_params.get('observation_keys', ['store_inventories'])
             
             # Concatenate features based on observation keys
             features = []
-            for key in observation_keys:
+            for key in observation_keys + ['moving_mean']:
                 if key != 'current_period' and key in processed_obs:
-                    features.append(processed_obs[key].flatten(start_dim=1))
+                    value = processed_obs[key]
+                    # Ensure [batch, ...] so flatten(start_dim=1) is valid for scalar features
+                    if torch.is_tensor(value) and value.dim() == 1:
+                        value = value.unsqueeze(1)
+                    features.append(value.flatten(start_dim=1))
             
             # Handle current_period separately if present
             if 'current_period' in observation_keys and 'current_period' in processed_obs:
@@ -209,6 +266,27 @@ class FeatureRegistry:
                 current_period_value = processed_obs['current_period'].unsqueeze(0).expand(features[0].size(0), -1)
                 features = [current_period_value] + features
             
+            # Add normalized fixed cost feature (K / mu_i) for single-anchor mode
+            if (single_anchor_normalization and 'mean_demand' in observation) or (normalize_by_mean_demand and 'past_demands' in observation):
+                fixed_cost = self._get_fixed_ordering_cost()
+                if fixed_cost is not None:
+                    if single_anchor_normalization:
+                        moving_mean = observation['mean_demand']
+                    elif normalize_by_mean_demand:
+                        moving_mean = self._moving_mean
+                    else:
+                        raise ValueError("Invalid normalization mode")
+                    mean_denom = torch.clamp(moving_mean, min=ewma_epsilon)
+                    fixed_cost_tensor = torch.tensor(
+                        fixed_cost,
+                        device=mean_denom.device,
+                        dtype=mean_denom.dtype
+                    )
+                    fixed_cost_feat = fixed_cost_tensor / mean_denom
+                    if torch.is_tensor(fixed_cost_feat) and fixed_cost_feat.dim() == 1:
+                        fixed_cost_feat = fixed_cost_feat.unsqueeze(1)
+                    features.append(fixed_cost_feat.flatten(start_dim=1))
+
             if features:
                 return torch.cat(features, dim=-1)
             else:

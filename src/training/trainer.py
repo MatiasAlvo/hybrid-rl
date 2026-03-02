@@ -504,7 +504,8 @@ class Trainer():
             'rewards': [],
             'terminated': [],
             'raw_continuous_samples': [],
-            'past_demands': []
+            'past_demands': [],
+            'mean_demand': None
         }
 
     def _initialize_additional_data(self, collect_additional_data):
@@ -553,6 +554,10 @@ class Trainer():
         # NEW: Collect past_demands for normalization
         if observation is not None and 'past_demands' in observation:
             trajectory_data['past_demands'].append(observation['past_demands'].clone())
+
+        # Store per-trajectory mean demand anchor once
+        if observation is not None and 'mean_demand' in observation and trajectory_data.get('mean_demand') is None:
+            trajectory_data['mean_demand'] = observation['mean_demand'].clone()
         
         # Only append fields that exist and are not None
         if 'discrete_action_indices' in action_dict and action_dict['discrete_action_indices'] is not None:
@@ -595,7 +600,9 @@ class Trainer():
         
         processed_data = {}
         for k, v in trajectory_data.items():
-            if not v:
+            if isinstance(v, torch.Tensor):
+                processed_data[k] = v
+            elif not v:
                 processed_data[k] = None
             elif v[0] is None:
                 # Handle lists containing None values

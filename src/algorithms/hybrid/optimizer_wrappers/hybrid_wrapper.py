@@ -263,6 +263,10 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Create a copy of rewards for pathwise computation only if needed
         if self.required_losses['pathwise']:
             processed_data['pathwise_rewards'] = trajectory_data['rewards'].clone()
+            if self.ppo_params.get('single_anchor_reward_scaling', False) and trajectory_data.get('mean_demand') is not None:
+                mean_demand = trajectory_data['mean_demand']
+                mean_per_sample = mean_demand.mean(dim=1)  # [B]
+                processed_data['pathwise_rewards'] = processed_data['pathwise_rewards'] / mean_per_sample.view(1, -1)
             if self.ppo_params['reward_scaling_pathwise']:
                 rewards_std = processed_data['pathwise_rewards'].std().detach()
                 if rewards_std > 0:
@@ -1121,6 +1125,10 @@ class HybridWrapper(BaseOptimizerWrapper):
             return None, None, None
             
         rewards = trajectory_data['rewards'].clone().detach()
+        if self.ppo_params.get('single_anchor_reward_scaling', False) and trajectory_data.get('mean_demand') is not None:
+            mean_demand = trajectory_data['mean_demand']
+            mean_per_sample = mean_demand.mean(dim=1)  # [B]
+            rewards = rewards / mean_per_sample.view(1, -1)
         if self.ppo_params['reward_scaling']:
             rewards_std = rewards.std()
             if rewards_std > 0:

@@ -295,6 +295,10 @@ class Simulator(gym.Env):
         for k, v in observation_params['include_static_features'].items():
             if v:
                 observation[k] = data[k]
+        
+        # Include mean demand anchor if provided
+        if 'mean_demand' in data:
+            observation['mean_demand'] = data['mean_demand']
 
         # Initialize data for past observations of certain data (e.g., arrivals, orders)
         for k, v in observation_params['include_past_observations'].items():

@@ -466,6 +466,11 @@ class DatasetCreator():
         common_data = {k: data[k] for k in scenario.split_by['sample_index']}
         out_datasets = []
 
+        # Compute mean demand from train periods and share across splits
+        if 'demands' in data and periods_for_split and periods_for_split[0] is not None:
+            train_range = slice(*map(int, periods_for_split[0].strip('() ').split(',')))
+            common_data['mean_demand'] = data['demands'][:, :, train_range].mean(dim=2)
+
         for period_range in periods_for_split:
             this_data = copy.deepcopy(common_data)
             # Change period_range to slice object (it is currently of type string)
