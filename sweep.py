@@ -251,10 +251,15 @@ def train_sweep(sweep_config):
                 'continuous_shift': ('hyperparams', ['nn_params', 'policy_network', 'continuous_shift']),
                 'normalize_by_mean_demand': ('hyperparams', ['nn_params', 'policy_network', 'normalize_by_mean_demand']),
                 'discrete_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'discrete']),
+                'continuous_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'continuous']),
+                'backbone_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'backbone']),
+                'value_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'value']),
+                'other_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'other']),
                 'use_wandb': ('hyperparams', ['logging_params', 'use_wandb']),
                 # Add mapping for threshold parameter
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
                 'fixed_cost': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'values', 1]),
+                'n_stores': ('setting', ['problem_params', 'n_stores']),
             }
             
             # Update configs based on sweep parameters from run.config
@@ -288,6 +293,32 @@ def train_sweep(sweep_config):
                         while len(current) <= param_path[-1]:
                             current.append(None)
                         current[param_path[-1]] = param_value
+
+            # Scale fixed ordering cost by number of stores after overrides
+            problem_params = setting_config.get('problem_params', {})
+            n_stores = problem_params.get('n_stores', 1)
+            fixed_cost_config = (
+                problem_params
+                .get('discrete_features', {})
+                .get('fixed_ordering_cost', {})
+            )
+            if fixed_cost_config.get('_scaled_by_n_stores'):
+                print("Fixed ordering cost already scaled by n_stores; skipping.")
+            else:
+                values = fixed_cost_config.get('values')
+                if isinstance(values, list):
+                    fixed_cost_config['values'] = [
+                        (v * n_stores) if isinstance(v, (int, float)) else v
+                        for v in values
+                    ]
+                    fixed_cost_config['_scaled_by_n_stores'] = True
+                    print(f"Scaled fixed_ordering_cost values by n_stores={n_stores}: {fixed_cost_config['values']}")
+
+            # Keep wandb config in sync with updated setting config
+            try:
+                wandb.config.update({'setting_config': setting_config}, allow_val_change=True)
+            except Exception as e:
+                print(f"Warning: failed to update wandb setting_config: {e}")
 
             # Add relevant problem parameters as tags
             problem_params = setting_config.get('problem_params', {})

@@ -92,6 +92,19 @@ class Logger:
             'dev/loss/best': float('inf'),
             'test/loss/best': float('inf')
         }
+        self._cosine_mean_keys = {
+            "train/cosine/continuous/pathwise/mean",
+            "train/cosine/continuous/policy/mean",
+            "train/cosine/continuous/reinforce/mean",
+            "train/cosine/discrete/policy/mean",
+            "train/cosine/discrete/reinforce/mean",
+            "train/cosine/continuous/policy_plus_pathwise/mean",
+            "train/cosine/continuous/reinforce_plus_pathwise/mean",
+            "train/cosine/continuous/pathwise_vs_policy_plus_pathwise/mean",
+            "train/cosine/continuous/pathwise_vs_reinforce_plus_pathwise/mean",
+        }
+        self._cosine_mean_sums = {key: 0.0 for key in self._cosine_mean_keys}
+        self._cosine_mean_counts = {key: 0 for key in self._cosine_mean_keys}
 
     def _log_hyperparameters(self, config: Dict[str, Any]):
         """
@@ -201,6 +214,9 @@ class Logger:
                 name = f"{prefix}/{name}"
             # Store the metric, preserving wandb.Histogram objects
             self.current_metrics[name] = value
+            if name in self._cosine_mean_keys and isinstance(value, (int, float, np.floating)):
+                self._cosine_mean_sums[name] += float(value)
+                self._cosine_mean_counts[name] += 1
         
         if epoch is not None:
             self.current_metrics['epoch'] = epoch
@@ -269,6 +285,20 @@ class Logger:
         if self.use_wandb:
             self.flush_metrics()
             try:
+                if wandb.run is not None:
+                    summary_updates = {}
+                    mean_values = []
+                    for key in self._cosine_mean_keys:
+                        count = self._cosine_mean_counts.get(key, 0)
+                        if count > 0:
+                            mean_value = self._cosine_mean_sums[key] / count
+                            summary_updates[f"{key}/across_epochs_mean"] = mean_value
+                            mean_values.append(mean_value)
+                    if mean_values:
+                        summary_updates["train/cosine/mean_of_means"] = sum(mean_values) / len(mean_values)
+                    if summary_updates:
+                        wandb.run.summary.update(summary_updates)
+
                 # Get the wandb run directory before finishing
                 if wandb.run is not None:
                     wandb_dir = wandb.run.dir

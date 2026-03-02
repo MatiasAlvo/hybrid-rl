@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid.yml'
+  hyperparams: 'configs/policies/hybrid_real_demand.yml'
 
 method: 'random'
 metric:
@@ -13,36 +13,29 @@ parameters:
       - false
   anneal_lr:
     values:
-      - true
       - false
   buffer_periods:
     values:
-      - 20
       - 10
   clip_coef:
-    distribution: uniform
-    max: 0.2
-    min: 0.1
+    values:
+      - 0.16
   fixed_cost:
     distribution: categorical
     values:
       - 64
   gae_lambda:
-    distribution: uniform
-    max: 0.97
-    min: 0.95
+    values:
+      - 0.96
   gamma:
-    distribution: uniform
-    max: 0.95
-    min: 0.92
+    values:
+      - 0.94
   learning_rate:
-    distribution: log_uniform_values
-    max: 0.01
-    min: 0.0001
+    values:
+      - 0.001
   max_grad_norm:
-    distribution: uniform
-    max: 10
-    min: 1
+    values:
+      - 5.0
   normalize_advantages:
     values:
       - true
@@ -51,15 +44,12 @@ parameters:
       - false
   num_epochs:
     values:
-      - 5
       - 3
   pathwise_coef:
-    distribution: log_uniform_values
-    max: 100
-    min: 0.1
+    values:
+      - 5.0
   policy_activation:
     values:
-      - Tanh
       - ELU
   reward_scaling:
     values:
@@ -74,19 +64,21 @@ parameters:
     values: 
       - Tanh
   value_function_coef:
-    distribution: log_uniform_values
-    max: 0.2
-    min: 0.1
+    values:
+      - 0.14
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
+      - 0.0
       - 1.0
       - 5.0
   normalize_by_mean_demand:
     values:
       - true
+  disable_cross_term:
+    values:
       - false
   use_wandb:
     values:

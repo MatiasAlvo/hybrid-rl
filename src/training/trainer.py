@@ -69,6 +69,10 @@ class Trainer():
         anneal_lr = optimizer_params.get('anneal_lr', False)
         
         for epoch in range(epochs):
+            skip_update_every = optimizer_params.get('skip_update_every_n_epochs', 0)
+            skip_update = skip_update_every > 0 and (epoch + 1) % skip_update_every == 0
+            if hasattr(optimizer_wrapper, 'set_skip_update'):
+                optimizer_wrapper.set_skip_update(skip_update)
             # Update learning rate if annealing is enabled
             if anneal_lr:
                 frac = 1.0 - (epoch / epochs)
@@ -359,6 +363,8 @@ class Trainer():
 
         if train and model.trainable and hasattr(optimizer_wrapper, 'on_epoch_end'):
             optimizer_wrapper.on_epoch_end()
+            if hasattr(optimizer_wrapper, 'get_epoch_metrics'):
+                metrics.update(optimizer_wrapper.get_epoch_metrics())
 
         if return_trajectory:
             if collect_additional_data:

@@ -68,9 +68,9 @@ store_params:
     'decimals': 3
   'lead_time': 
     'sample_across_stores': False
-    'vary_across_samples': False
+    'vary_across_samples': False,
     'expand': True
-    'value': 4  # Values tested: 1, 4, 7, 10, 15, 20
+    'value': 2  # Values tested: 1, 4, 7, 10, 15, 20
   'holding_cost': 
     'sample_across_stores': False 
     'vary_across_samples': False

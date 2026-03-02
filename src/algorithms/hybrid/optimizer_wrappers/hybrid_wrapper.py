@@ -43,6 +43,9 @@ class HybridWrapper(BaseOptimizerWrapper):
     def __init__(self, model, optimizer, problem_params, device='cpu', ppo_params=None):
         super().__init__(model, optimizer, problem_params, device)
         self.ppo_params = ppo_params or {}  # Use empty dict if no params provided
+        self.cosine_grad_analysis = self.ppo_params.get('cosine_grad_analysis', False)
+        self._cosine_grad_buffers = None
+        self._last_cosine_metrics = {}
         
         # Get required losses from the model
         self.base_required_losses = copy.deepcopy(model.required_losses)
@@ -53,6 +56,8 @@ class HybridWrapper(BaseOptimizerWrapper):
             print("🔒 Disabling cross-term in policy loss")
         else:
             print("🔓 Enabling cross-term in policy loss")
+        self._warned_num_minibatches = False
+        self.skip_update = False
         
         # Optional loss schedule for alternating optimization phases
         self.loss_schedule = self._init_loss_schedule(self.ppo_params.get('loss_schedule'))
@@ -133,15 +138,28 @@ class HybridWrapper(BaseOptimizerWrapper):
 
     def on_epoch_start(self):
         """Update loss schedule at the start of an epoch."""
-        if self.loss_schedule is None:
-            return
-        self._set_required_losses_for_epoch(self.epoch_count)
+        if self.loss_schedule is not None:
+            self._set_required_losses_for_epoch(self.epoch_count)
+        if self.cosine_grad_analysis and self.skip_update:
+            self._cosine_grad_buffers = {}
+        else:
+            self._cosine_grad_buffers = None
     
     def on_epoch_end(self):
         """Advance loss schedule at the end of an epoch."""
-        if self.loss_schedule is None:
-            return
-        self.epoch_count += 1
+        if self.loss_schedule is not None:
+            self.epoch_count += 1
+        if self.cosine_grad_analysis and self.skip_update and self._cosine_grad_buffers is not None:
+            self._last_cosine_metrics = self._compute_cosine_metrics()
+            self._cosine_grad_buffers = None
+
+    def get_epoch_metrics(self):
+        metrics = self._last_cosine_metrics
+        self._last_cosine_metrics = {}
+        return metrics
+
+    def set_skip_update(self, skip_update):
+        self.skip_update = bool(skip_update)
 
     def freeze_backbone_params(self):
         """Freeze backbone parameters for debugging - easy to undo"""
@@ -187,7 +205,8 @@ class HybridWrapper(BaseOptimizerWrapper):
         # if disable_cross_term is True, we detach the observations
         # this effectively disables the cross-term in the policy loss
         # thus, continuous parameters dont get a gradient from the policy loss
-        if self.disable_cross_term:
+        # unless we are doing cosine grad analysis and skipping updates
+        if self.disable_cross_term and not (self.cosine_grad_analysis and self.skip_update):
             trajectory_data['observations'] = trajectory_data['observations'].detach().clone()
         else:
             trajectory_data['observations'] = trajectory_data['observations']
@@ -198,12 +217,12 @@ class HybridWrapper(BaseOptimizerWrapper):
         processed_data = self._prepare_trajectory_data(trajectory_data)
         
         # Compute advantages and returns only if needed
-        advantages, returns = None, None
+        advantages, returns, cum_rewards = None, None, None
         if self.required_losses['policy_gradient'] or self.required_losses['value']:
-            advantages, returns = self.compute_advantages(trajectory_data)
+            advantages, returns, cum_rewards = self.compute_advantages(trajectory_data)
         
         # Prepare tensors for training
-        tensors = self._prepare_training_tensors(trajectory_data, advantages, returns, processed_data)
+        tensors = self._prepare_training_tensors(trajectory_data, advantages, returns, cum_rewards, processed_data)
         
         # Compute pre-training diagnostics only if value network is used
         diagnostics = {}
@@ -231,8 +250,10 @@ class HybridWrapper(BaseOptimizerWrapper):
         processed_data['num_ppo_epochs'] = self.ppo_params['num_epochs']
         processed_data['pathwise_coef'] = self.ppo_params['pathwise_coef']
         processed_data['norm_adv'] = self.ppo_params['normalize_advantages']
+        processed_data['use_reinforce_loss'] = self.ppo_params.get('use_reinforce_loss', False)
         processed_data['vf_coef'] = self.ppo_params['value_function_coef']
         processed_data['max_grad_norm'] = self.ppo_params['max_grad_norm']
+        processed_data['skip_update'] = self.skip_update
 
         # PPO parameters with defaults
         processed_data['target_kl'] = self.ppo_params.get('target_kl', 0.015)
@@ -266,7 +287,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         return processed_data
 
-    def _prepare_training_tensors(self, trajectory_data, advantages, returns, processed_data):
+    def _prepare_training_tensors(self, trajectory_data, advantages, returns, cum_rewards, processed_data):
         """Prepare tensors for training."""
         # Extract data from trajectory
         observations = trajectory_data['observations']
@@ -296,17 +317,22 @@ class HybridWrapper(BaseOptimizerWrapper):
                 tensors['raw_continuous_samples'] = trajectory_data['raw_continuous_samples'][effective_slice].reshape(-1, *trajectory_data['raw_continuous_samples'].shape[2:])
                 # tensors['raw_continuous_samples'] = trajectory_data['raw_continuous_samples'][effective_slice].reshape(-1, trajectory_data['raw_continuous_samples'].shape[2], trajectory_data['raw_continuous_samples'].shape[3])
         
-        if self.required_losses['value'] and 'values' in trajectory_data:
+        if (self.required_losses['value'] or processed_data['use_reinforce_loss']) and 'values' in trajectory_data:
             tensors.update({
                 'returns': returns[effective_slice].reshape(effective_T * B),
                 'values': trajectory_data['values'][effective_slice].reshape(effective_T * B)
             })
+        
+        if processed_data['use_reinforce_loss'] and cum_rewards is not None:
+            tensors['cum_rewards'] = cum_rewards[effective_slice].reshape(effective_T * B)
         
         # Only detach tensors that shouldn't track gradients for pathwise derivatives
         if 'advantages' in tensors:
             tensors['advantages'] = tensors['advantages'].detach()
         if 'returns' in tensors:
             tensors['returns'] = tensors['returns'].detach()
+        if 'cum_rewards' in tensors:
+            tensors['cum_rewards'] = tensors['cum_rewards'].detach()
         
         return tensors
 
@@ -393,6 +419,10 @@ class HybridWrapper(BaseOptimizerWrapper):
         # batch indices
         b_inds = torch.arange(batch_size, device=self.device)
         num_ppo_epochs = processed_data['num_ppo_epochs']
+        num_minibatches = self.ppo_params.get('num_minibatches', 4)
+        if not self._warned_num_minibatches:
+            print(f"Using num_minibatches={num_minibatches} for PPO updates")
+            self._warned_num_minibatches = True
         
         # Update Gumbel-Softmax temperature if applicable
         if hasattr(self.model, 'update_temperature'):
@@ -416,8 +446,9 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Training loop
         for epoch in range(num_ppo_epochs):
-            # For first epoch, use full batch
-            current_minibatch_size = batch_size if epoch == 0 else batch_size // self.ppo_params.get('num_minibatches', 4)
+            # For first epoch, use full batch, since we update continuous parameters
+            # and pathwise gradients are only used once
+            current_minibatch_size = batch_size if epoch == 0 else batch_size // num_minibatches
             
             # shuffle batch indices
             perm = torch.randperm(batch_size, device=self.device)
@@ -436,7 +467,7 @@ class HybridWrapper(BaseOptimizerWrapper):
                 mb_data = self._get_minibatch(tensors, mb_inds)
                 
                 # Compute losses ALREADY MULTIPLIED by the coefficients
-                policy_loss, value_loss, entropy_loss, pathwise_loss, metrics, raw_entropy = self._compute_losses(
+                policy_loss, value_loss, entropy_loss, pathwise_loss, metrics, raw_entropy, reinforce_loss = self._compute_losses(
                     mb_data, 
                     processed_data, 
                     epoch
@@ -467,6 +498,7 @@ class HybridWrapper(BaseOptimizerWrapper):
                         value_loss, 
                         entropy_loss, 
                         pathwise_loss, 
+                        reinforce_loss,
                         processed_data
                     )
                 
@@ -528,8 +560,6 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Compute number of updates for averaging
         # Epoch 0 always has 1 update (full batch), subsequent epochs have num_minibatches updates
-        num_minibatches = self.ppo_params.get('num_minibatches', 4)
-        
         if early_stop_batch is not None:
             # Early stopping occurred - count all completed epochs plus partial minibatches
             # Epoch 0 has 1 update
@@ -609,6 +639,9 @@ class HybridWrapper(BaseOptimizerWrapper):
         if 'returns' in tensors:
             mb_data['returns'] = tensors['returns'][mb_inds]
         
+        if 'cum_rewards' in tensors:
+            mb_data['cum_rewards'] = tensors['cum_rewards'][mb_inds]
+        
         if 'values' in tensors:
             mb_data['values'] = tensors['values'][mb_inds]
         
@@ -617,7 +650,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         return mb_data
 
-    def _compute_losses(self, mb_data, processed_data, epoch , normalize_by_stores=True):
+    def _compute_losses(self, mb_data, processed_data, epoch , normalize_by_stores=False):
         """Compute all loss components for the current minibatch."""
         required_losses = processed_data['required_losses']
         
@@ -630,6 +663,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Initialize losses and metrics
         policy_loss = torch.tensor(0.0, device=self.device)
+        reinforce_loss = torch.tensor(0.0, device=self.device)
         value_loss = torch.tensor(0.0, device=self.device)
         entropy_loss = torch.tensor(0.0, device=self.device)
         pathwise_loss = torch.tensor(0.0, device=self.device)
@@ -661,7 +695,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             with torch.no_grad():
                 metrics['approx_kl'] = ((ratio - 1) - logratio).mean()
             
-            # Handle advantage normalization
+            # Compute policy loss with advantages
             mb_advantages = mb_data['advantages']
             if processed_data['norm_adv']:
                 mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
@@ -674,6 +708,15 @@ class HybridWrapper(BaseOptimizerWrapper):
             pg_loss1 = mb_advantages * ratio
             pg_loss2 = mb_advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
             policy_loss = -torch.min(pg_loss1, pg_loss2).mean()
+            
+            # Optionally compute reinforce-style loss using cumulative rewards
+            if processed_data['use_reinforce_loss']:
+                mb_returns = mb_data['cum_rewards']
+                if processed_data['norm_adv']:
+                    mb_returns = (mb_returns - mb_returns.mean()) / (mb_returns.std() + 1e-8)
+                mb_returns = mb_returns.unsqueeze(-1).expand_as(ratio)
+                reinforce_loss = -torch.min(mb_returns * ratio,
+                                            mb_returns * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)).mean()
             
             # Compute clipping fraction for diagnostics
             metrics['clipfrac'] = ((ratio - 1.0).abs() > clip_coef).float().mean().item()
@@ -712,9 +755,9 @@ class HybridWrapper(BaseOptimizerWrapper):
             if normalize_by_stores:
                 pathwise_loss = pathwise_loss / self.n_stores
         
-        return policy_loss, value_loss, entropy_loss, pathwise_loss, metrics, raw_entropy
+        return policy_loss, value_loss, entropy_loss, pathwise_loss, metrics, raw_entropy, reinforce_loss
 
-    def _analyze_gradients(self, policy_loss, value_loss, entropy_loss, pathwise_loss, processed_data):
+    def _analyze_gradients(self, policy_loss, value_loss, entropy_loss, pathwise_loss, reinforce_loss, processed_data):
         """Analyze gradients from different loss components."""
         gradient_metrics = {}
         required_losses = processed_data['required_losses']
@@ -722,6 +765,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Only analyze pathwise gradients if pathwise loss is used
         if required_losses['pathwise'] and pathwise_loss.requires_grad:
             pathwise_loss.backward(retain_graph=True)
+            self._record_cosine_gradients('pathwise')
             # print(f"Pathwise loss gradients")
             for name, param in self.model.named_parameters():
                 if param.grad is not None:
@@ -735,10 +779,20 @@ class HybridWrapper(BaseOptimizerWrapper):
         if required_losses['policy_gradient'] and policy_loss.requires_grad:
             # print(f"Policy loss gradients")
             policy_loss.backward(retain_graph=True)
+            self._record_cosine_gradients('policy')
             for name, param in self.model.named_parameters():
                 if param.grad is not None:
                     # print(f"Gradient for parameter {name}: {param.grad.shape} with norm {torch.norm(param.grad)}")
                     gradient_metrics[f'grad_analysis/policy/{name}'] = param.grad.abs().mean().item()
+        
+        # Analyze reinforce gradients if reinforce loss is used
+        if processed_data['use_reinforce_loss'] and reinforce_loss.requires_grad:
+            # print(f"Reinforce loss gradients")
+            reinforce_loss.backward(retain_graph=True)
+            for name, param in self.model.named_parameters():
+                if param.grad is not None:
+                    # print(f"Gradient for parameter {name}: {param.grad.shape} with norm {torch.norm(param.grad)}")
+                    gradient_metrics[f'grad_analysis/reinforce/{name}'] = param.grad.abs().mean().item()
         
         # Zero gradients again
         self.optimizer.zero_grad()
@@ -752,11 +806,134 @@ class HybridWrapper(BaseOptimizerWrapper):
                     # print(f"Gradient for parameter {name}: {param.grad.shape} with norm {torch.norm(param.grad)}")
                     gradient_metrics[f'grad_analysis/value/{name}'] = param.grad.abs().mean().item()
         
+        if processed_data.get('use_reinforce_loss', False) and reinforce_loss.requires_grad:
+            self.optimizer.zero_grad()
+            reinforce_loss.backward(retain_graph=True)
+            self._record_cosine_gradients('reinforce')
+            self.optimizer.zero_grad()
+        
         # raise Exception("Stop here")
         # Zero gradients again
         self.optimizer.zero_grad()
         
         return gradient_metrics
+
+    def _record_cosine_gradients(self, loss_name):
+        if not self.cosine_grad_analysis or self._cosine_grad_buffers is None:
+            return
+        heads_layers = getattr(getattr(self.model, 'policy', None), 'heads_layers', None)
+        if heads_layers is None:
+            return
+        for head_name in ('continuous', 'discrete'):
+            if head_name not in heads_layers:
+                continue
+            head = heads_layers[head_name]
+            if not hasattr(head, 'weight') or head.weight.grad is None:
+                continue
+            grad_vec = head.weight.grad.detach().flatten().cpu()
+            key = f'{head_name}/{loss_name}'
+            if key not in self._cosine_grad_buffers:
+                self._cosine_grad_buffers[key] = []
+            self._cosine_grad_buffers[key].append(grad_vec)
+
+    def _compute_cosine_metrics(self):
+        metrics = {}
+        for key, vecs in self._cosine_grad_buffers.items():
+            if not vecs:
+                continue
+            stacked = torch.stack(vecs)
+            true_vec = stacked.sum(dim=0)
+            true_norm = true_vec.norm() + 1e-8
+            vec_norms = stacked.norm(dim=1) + 1e-8
+            cosines = (stacked @ true_vec) / (vec_norms * true_norm)
+            metrics[f'cosine/{key}/mean'] = cosines.mean().item()
+        
+        metrics.update(self._compute_combined_cosine_metrics())
+        return metrics
+
+    def _compute_combined_cosine_metrics(self):
+        metrics = {}
+        if self._cosine_grad_buffers is None:
+            return metrics
+        
+        def add_combined(prefix, key_a, key_b):
+            vecs_a = self._cosine_grad_buffers.get(key_a)
+            vecs_b = self._cosine_grad_buffers.get(key_b)
+            if not vecs_a or not vecs_b:
+                return
+            n = min(len(vecs_a), len(vecs_b))
+            combined = [vecs_a[i] + vecs_b[i] for i in range(n)]
+            stacked = torch.stack(combined)
+            true_vec = stacked.sum(dim=0)
+            true_norm = true_vec.norm() + 1e-8
+            vec_norms = stacked.norm(dim=1) + 1e-8
+            cosines = (stacked @ true_vec) / (vec_norms * true_norm)
+            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
+            metrics[f'cosine/{prefix}/min'] = cosines.min().item()
+            metrics[f'cosine/{prefix}/max'] = cosines.max().item()
+
+        def add_against_combined_true(prefix, key_query, key_a, key_b):
+            vecs_query = self._cosine_grad_buffers.get(key_query)
+            vecs_a = self._cosine_grad_buffers.get(key_a)
+            vecs_b = self._cosine_grad_buffers.get(key_b)
+            if not vecs_query or not vecs_a or not vecs_b:
+                return
+            n = min(len(vecs_query), len(vecs_a), len(vecs_b))
+            if n == 0:
+                return
+            combined = [vecs_a[i] + vecs_b[i] for i in range(n)]
+            combined_stack = torch.stack(combined)
+            true_vec = combined_stack.sum(dim=0)
+            true_norm = true_vec.norm() + 1e-8
+            query_stack = torch.stack(vecs_query[:n])
+            query_norms = query_stack.norm(dim=1) + 1e-8
+            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
+            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
+            metrics[f'cosine/{prefix}/min'] = cosines.min().item()
+            metrics[f'cosine/{prefix}/max'] = cosines.max().item()
+
+        def add_against_true(prefix, key_query, key_true):
+            vecs_query = self._cosine_grad_buffers.get(key_query)
+            vecs_true = self._cosine_grad_buffers.get(key_true)
+            if not vecs_query or not vecs_true:
+                return
+            if vecs_query[0].shape != vecs_true[0].shape:
+                return
+            true_stack = torch.stack(vecs_true)
+            true_vec = true_stack.sum(dim=0)
+            true_norm = true_vec.norm() + 1e-8
+            query_stack = torch.stack(vecs_query)
+            query_norms = query_stack.norm(dim=1) + 1e-8
+            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
+            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
+            metrics[f'cosine/{prefix}/min'] = cosines.min().item()
+            metrics[f'cosine/{prefix}/max'] = cosines.max().item()
+        
+        add_combined('continuous/reinforce_plus_pathwise', 'continuous/reinforce', 'continuous/pathwise')
+        add_combined('continuous/policy_plus_pathwise', 'continuous/policy', 'continuous/pathwise')
+        add_against_combined_true(
+            'continuous/pathwise_vs_reinforce_plus_pathwise',
+            'continuous/pathwise',
+            'continuous/reinforce',
+            'continuous/pathwise'
+        )
+        add_against_combined_true(
+            'continuous/pathwise_vs_policy_plus_pathwise',
+            'continuous/pathwise',
+            'continuous/policy',
+            'continuous/pathwise'
+        )
+        add_against_true(
+            'discrete/policy_vs_reinforce_true',
+            'discrete/policy',
+            'discrete/reinforce'
+        )
+        add_against_true(
+            'continuous/policy_vs_reinforce_true',
+            'continuous/policy',
+            'continuous/reinforce'
+        )
+        return metrics
 
     def _optimization_step(self, policy_loss, value_loss, entropy_loss, pathwise_loss, processed_data):
         """Perform optimization step with only the required losses combined."""
@@ -780,7 +957,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Skip backward if no loss components are used
         grad_metrics = {}
-        if loss.requires_grad:
+        if loss.requires_grad and not processed_data.get('skip_update', False):
             loss.backward()
             
             # Zero out gradients for frozen backbone parameters
@@ -941,7 +1118,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         """Compute advantages and returns from trajectory data."""
         # Skip if not needed
         if not self.required_losses['policy_gradient'] and not self.required_losses['value']:
-            return None, None
+            return None, None, None
             
         rewards = trajectory_data['rewards'].clone().detach()
         if self.ppo_params['reward_scaling']:
@@ -951,14 +1128,31 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         # Get parameters from config
         gamma = self.ppo_params.get('gamma', 0.95)
+        reinforce_gamma = self.ppo_params.get('reinforce_gamma', 0.99)
         gae_lambda = self.ppo_params.get('gae_lambda', 0.99)
         use_gae = self.ppo_params.get('use_gae', True)
         
         T, B = trajectory_data['rewards'].shape
         
         with torch.no_grad():
-            next_value = self.model.value_net(trajectory_data['next_observation'])
+            next_observation = trajectory_data['next_observation']
+            if isinstance(next_observation, dict):
+                if hasattr(self.model, 'feature_registry') and self.model.feature_registry is not None:
+                    next_obs_vec = self.model.feature_registry.prepare_inputs(next_observation, update_ewma=False)
+                    next_value = self.model.value_net(next_obs_vec, process_state=False)
+                else:
+                    next_value = self.model.value_net(next_observation)
+            else:
+                next_value = self.model.value_net(next_observation, process_state=False)
             values = trajectory_data['values'].reshape(T, B)
+            
+            cum_rewards = None
+            if self.ppo_params.get('use_reinforce_loss', False):
+                cum_rewards = torch.zeros_like(rewards, device=self.device)
+                running_sum = next_value.squeeze()
+                for t in reversed(range(T)):
+                    running_sum = rewards[t] + reinforce_gamma * running_sum
+                    cum_rewards[t] = running_sum
             
             if use_gae:
                 # GAE implementation
@@ -977,7 +1171,7 @@ class HybridWrapper(BaseOptimizerWrapper):
                     returns[t] = rewards[t] + gamma * next_return
                 advantages = returns - values
             
-            return advantages, returns
+            return advantages, returns, cum_rewards
 
     def _create_discrete_probabilities_histogram(self, log_probs):
         """Create histogram data of discrete probabilities for the last action."""

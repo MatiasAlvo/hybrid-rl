@@ -185,6 +185,17 @@ class Scenario():
                                       demand_params['std'], 
                                       size=(self.num_samples, 1, periods)
                                       )
+        elif demand_params.get('correlation', None) == 0.0:
+            n_stores = problem_params['n_stores']
+            mean = demand_params['mean']
+            std = demand_params['std']
+            if not isinstance(mean, (list, np.ndarray)):
+                mean = np.full(n_stores, mean)
+            if not isinstance(std, (list, np.ndarray)):
+                std = np.full(n_stores, std)
+            cov_matrix = np.diag(np.array(std) ** 2)
+            demand = np.random.multivariate_normal(mean, cov=cov_matrix, size=(self.num_samples, periods))
+            demand = np.transpose(demand, (0, 2, 1))
         else:
             # Calculate covariance matrix and sample from multivariate normal
             correlation = demand_params['correlation']

@@ -11,7 +11,7 @@ trainer_params:
   'compute_metrics_on_test': false
 
 logging_params: 
-  'use_wandb': true
+  'use_wandb': false
   'use_tensorboard': false
   'wandb_project_name': "inventory_control"
   'wandb_entity': "alvomatias"

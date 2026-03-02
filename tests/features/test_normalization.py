@@ -25,6 +25,7 @@ class TestNormalizationDenormalization:
         self.config = {
             'policy_network': {
                 'normalize_by_mean_demand': True,
+                'ewma_beta': 0.9,
                 'observation_keys': ['store_inventories', 'past_demands', 'past_arrivals', 'past_orders']
             }
         }
@@ -32,6 +33,7 @@ class TestNormalizationDenormalization:
         # Create mock range manager
         self.range_manager = Mock(spec=RangeManager)
         self.range_manager.scale_continuous_by_ranges = Mock(side_effect=self._mock_scale_continuous)
+        self.range_manager.apply_activations = MagicMock(side_effect=lambda x: x)
         
         # Create feature registry
         self.feature_registry = FeatureRegistry(self.config, self.range_manager)
@@ -43,16 +45,6 @@ class TestNormalizationDenormalization:
         """Mock the scale_continuous_by_ranges method to test denormalization."""
         # Simulate basic scaling
         scaled_values = continuous_values * 2.0 + 1.0
-        
-        # Apply denormalization if normalization was used
-        if (feature_registry is not None and 
-            hasattr(feature_registry, '_last_normalization_constant') and
-            feature_registry._last_normalization_constant is not None):
-            
-            mean_demand = feature_registry._last_normalization_constant
-            # Expand to match continuous_values shape
-            mean_demand_expanded = mean_demand.view(-1, 1, 1).expand_as(continuous_values)
-            scaled_values = scaled_values * mean_demand_expanded
         
         return scaled_values
     
@@ -86,7 +78,7 @@ class TestNormalizationDenormalization:
         result = self.feature_registry.prepare_inputs(observation)
         
         # Should not normalize when past_demands is missing
-        assert not hasattr(self.feature_registry, '_last_normalization_constant')
+        assert not hasattr(self.feature_registry, '_moving_mean') or self.feature_registry._moving_mean is None
         assert result is not None
     
     def test_normalization_with_past_demands(self):
@@ -113,13 +105,21 @@ class TestNormalizationDenormalization:
         
         result = self.feature_registry.prepare_inputs(observation)
         
-        # Check that normalization constant was stored
-        assert hasattr(self.feature_registry, '_last_normalization_constant')
-        mean_demand = self.feature_registry._last_normalization_constant
+        # Check that EWMA stats were stored
+        assert hasattr(self.feature_registry, '_moving_mean')
+        assert hasattr(self.feature_registry, '_moving_variance')
+        moving_mean = self.feature_registry._moving_mean
+        moving_variance = self.feature_registry._moving_variance
         
-        # Expected mean demand: mean across stores and periods
-        expected_mean_demand = observation['past_demands'].mean(dim=(1, 2))
-        assert torch.allclose(mean_demand, expected_mean_demand)
+        # Expected EWMA mean/variance update
+        beta = self.config['policy_network']['ewma_beta']
+        initial_mean = observation['past_demands'].mean(dim=2)
+        initial_variance = observation['past_demands'].var(dim=2, unbiased=False)
+        current_demand = observation['past_demands'][:, :, -1]
+        expected_mean = beta * initial_mean + (1 - beta) * current_demand
+        expected_variance = beta * initial_variance + (1 - beta) * (current_demand - expected_mean) ** 2
+        assert torch.allclose(moving_mean, expected_mean)
+        assert torch.allclose(moving_variance, expected_variance)
         
         # Check that original observation was not modified
         assert torch.allclose(observation['store_inventories'], original_inventories)
@@ -139,20 +139,20 @@ class TestNormalizationDenormalization:
                                         [[2.0, 4.0, 6.0], [8.0, 10.0, 12.0]]])
         }
         
-        # Manually compute expected mean demand
-        expected_mean_demand = observation['past_demands'].mean(dim=(1, 2))
-        # Sample 0: mean of [1,2,3,4,5,6] = 3.5
-        # Sample 1: mean of [2,4,6,8,10,12] = 7.0
-        expected_mean_demand = torch.tensor([3.5, 7.0])
+        # Manually compute expected EWMA mean
+        beta = self.config['policy_network']['ewma_beta']
+        initial_mean = observation['past_demands'].mean(dim=2)
+        current_demand = observation['past_demands'][:, :, -1]
+        expected_mean = beta * initial_mean + (1 - beta) * current_demand
         
         result = self.feature_registry.prepare_inputs(observation)
         
         # Check normalization constant
-        actual_mean_demand = self.feature_registry._last_normalization_constant
-        assert torch.allclose(actual_mean_demand, expected_mean_demand)
+        actual_mean = self.feature_registry._moving_mean
+        assert torch.allclose(actual_mean, expected_mean)
     
-    def test_denormalization_in_scale_continuous(self):
-        """Test that denormalization is applied in scale_continuous_by_ranges."""
+    def test_scale_by_mean_before_ranges(self):
+        """Test that activated values are multiplied by mean before range scaling."""
         # First, prepare inputs to set up normalization
         observation = {
             'store_inventories': torch.tensor([[10.0, 20.0]]),
@@ -162,21 +162,29 @@ class TestNormalizationDenormalization:
         # This will set up the normalization constant
         self.feature_registry.prepare_inputs(observation)
         
-        # Now test denormalization in scale_continuous_by_ranges
-        continuous_values = torch.tensor([[[0.5, 1.0, 1.5]]])  # [batch, stores, ranges]
-        ranges = [[0, 10], [0, 20], [0, 30]]
+        # Capture input to scale_continuous_by_ranges
+        captured = {}
+        def _capture_scale(vals, ranges, observations=None, feature_registry=None):
+            captured['vals'] = vals
+            return vals
+        self.range_manager.scale_continuous_by_ranges = Mock(side_effect=_capture_scale)
         
-        # Call the actual scale_continuous_by_ranges method
-        scaled_values = self.range_manager.scale_continuous_by_ranges(
-            continuous_values, ranges, observations=observation, feature_registry=self.feature_registry
+        # Raw continuous output shape [batch, 1, n_stores * n_sub_ranges]
+        raw_continuous = torch.tensor([[[0.5, 1.0, 1.5, 2.0, 2.5, 3.0]]])
+        self.feature_registry.process_continuous_output(
+            raw_continuous,
+            random_continuous=False,
+            observations=observation
         )
         
-        # Check that denormalization was applied
-        # Expected: (continuous_values * 2.0 + 1.0) * mean_demand
-        # continuous_values * 2.0 + 1.0 = [[2.0, 3.0, 4.0]]
-        # mean_demand = 3.5, so final result should be [[7.0, 10.5, 14.0]]
-        expected_scaled = torch.tensor([[[7.0, 10.5, 14.0]]])
-        assert torch.allclose(scaled_values, expected_scaled, atol=1e-6)
+        # Check that scale_continuous_by_ranges received mean-scaled activated values
+        mean = self.feature_registry._moving_mean
+        epsilon = getattr(self.feature_registry, '_ewma_epsilon', 1e-5)
+        mean_denom = torch.clamp(mean, min=epsilon)
+        
+        reshaped_raw = self.feature_registry.reshape_continuous_output(raw_continuous)
+        expected_scaled = reshaped_raw * mean_denom.unsqueeze(-1)
+        assert torch.allclose(captured['vals'], expected_scaled, atol=1e-6)
     
     def test_no_denormalization_when_not_normalized(self):
         """Test that no denormalization is applied when normalization was not used."""
@@ -242,9 +250,9 @@ class TestNormalizationDenormalization:
             
             result = self.feature_registry.prepare_inputs(observation)
             
-            # Check that normalization constant has correct batch size
-            mean_demand = self.feature_registry._last_normalization_constant
-            assert mean_demand.shape == (batch_size,)
+            # Check that EWMA mean has correct batch size and store dim
+            moving_mean = self.feature_registry._moving_mean
+            assert moving_mean.shape == (batch_size, 3)
             
             # Check that result has correct batch size
             assert result.shape[0] == batch_size
@@ -260,8 +268,8 @@ class TestNormalizationDenormalization:
         
         # Should handle zero mean demand gracefully (due to +1e-8)
         assert result is not None
-        mean_demand = self.feature_registry._last_normalization_constant
-        assert torch.allclose(mean_demand, torch.tensor([0.0]))
+        mean_demand = self.feature_registry._moving_mean
+        assert torch.allclose(mean_demand, torch.zeros_like(mean_demand))
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ sample_data_params:
 
 problem_params: 
   'setting_name': "one_store_fixed_costs"
-  'n_stores': 1
+  'n_stores': 20
   'n_warehouses': 0
   'n_extra_echelons': 0
   'lost_demand': false
@@ -45,7 +45,7 @@ problem_params:
   'discrete_features': 
     'fixed_ordering_cost': 
       'thresholds': [-0.0001, 0.0, inf]  # first and last values are the same across all discrete features
-      'values': [0.0, 64.0]
+      'values': [0.0, 0.0]
 
 observation_params:
   'include_warehouse_inventory': False
@@ -58,8 +58,8 @@ observation_params:
     'mean': False
     'std': False
   'demand': 
-    'past_periods': 16 
-    'period_shift': 16
+    'past_periods': 1 
+    'period_shift': 0
   'include_past_observations':
     'arrivals': 0
     'orders': 0
@@ -71,35 +71,37 @@ observation_params:
 
 store_params: 
   'demand': 
-    'distribution': 'poisson'
-    'mean': 10.0
     'sample_across_stores': False
-    'expand': False
-    'clip': False
+    'expand': True
+    'mean': 5.0
+    'std': 1.6
+    'distribution': 'normal'
+    'correlation': 0.0
+    'clip': True
     'decimals': 3
   'lead_time': 
-    'value': 2
-    'vary_across_samples': False
     'sample_across_stores': False
+    'vary_across_samples': False
     'expand': True
+    'value': 0  # Values tested: 1, 4, 7, 10, 15, 20
   'holding_cost': 
-    'value': 1.0
+    'sample_across_stores': False 
     'vary_across_samples': False
-    'sample_across_stores': False
     'expand': True
+    'value': 1
   'underage_cost': 
-    'value': 9.0
-    'vary_across_samples': False
     'sample_across_stores': False
+    'vary_across_samples': False 
     'expand': True
-  'initial_inventory': 
-    'sample': False
-    'inventory_periods': 2
+    'value': 1.0  # Values tested: 4, 9, 19, 39
   'procurement_cost':
     'value': 0.0
     'vary_across_samples': False
     'sample_across_stores': False
     'expand': True
+  'initial_inventory': 
+    'sample': False
+    'inventory_periods': 1
 
 warehouse_params: 
   'holding_cost': 0.3
@@ -110,17 +112,17 @@ echelon_params:
 
 params_by_dataset : 
   'train': 
-    'n_samples': 1024 
-    'batch_size': 128  # Values tested: 1024, 8192
-    'periods': 100 
-    'ignore_periods': 16 
+    'n_samples': 16
+    'batch_size': 16  # Values tested: 1024, 8192
+    'periods': 2 
+    'ignore_periods': 0 
   'dev': 
-    'n_samples': 1024 
-    'batch_size': 128 
-    'periods': 100 
-    'ignore_periods': 16 
+    'n_samples': 16 
+    'batch_size': 16 
+    'periods': 2 
+    'ignore_periods': 0
   'test': 
-    'n_samples': 1024 
-    'batch_size': 128 
-    'periods': 100
-    'ignore_periods': 16
+    'n_samples': 16 
+    'batch_size': 16 
+    'periods': 2 
+    'ignore_periods': 0

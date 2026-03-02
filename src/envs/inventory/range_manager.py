@@ -357,20 +357,6 @@ class RangeManager:
         # Apply standard scaling first
         scaled_values = continuous_values * self.post_activation_scales + self.post_activation_shifts
         
-        # Apply denormalization if normalization was used during input preparation
-        if (feature_registry is not None and 
-            hasattr(feature_registry, '_last_normalization_constant') and
-            feature_registry._last_normalization_constant is not None):
-            
-            # Get the normalization constant used during input preparation
-            mean_demand = feature_registry._last_normalization_constant
-            
-            # Expand to match continuous_values shape: [batch] -> [batch, n_stores, n_ranges]
-            mean_demand_expanded = mean_demand.view(-1, 1, 1).expand_as(continuous_values)
-            
-            # Denormalize by multiplying by mean demand
-            scaled_values = scaled_values * mean_demand_expanded
-        
         return scaled_values
     
     def compute_feature_actions(self, discrete_probs, continuous_values):

@@ -97,8 +97,55 @@ class FeatureRegistry:
         Returns: x expanded to [S, 1, 1, ...] to match target dimensions
         """
         return x.view(-1, *([1] * (target.dim() - 1)))
+
+    def _expand_store_batch(self, x, target):
+        """
+        Expand [batch, stores] to match target shape [batch, stores, ...].
+        """
+        if x is None:
+            return None
+        if target.dim() <= 2:
+            return x
+        expand_dims = target.dim() - 2
+        return x.view(x.shape[0], x.shape[1], *([1] * expand_dims))
+
+    def _initialize_ewma_stats(self, past_demands):
+        """
+        Initialize EWMA mean/variance from the initial demand buffer.
+        """
+        if past_demands is None:
+            return
+        self._moving_mean = past_demands.mean(dim=2)
+        self._moving_variance = past_demands.var(dim=2, unbiased=False)
+
+    def _update_ewma_stats(self, current_demand, beta):
+        """
+        Update EWMA trackers using the latest demand.
+        """
+        if current_demand is None:
+            return
+        if not hasattr(self, '_moving_mean') or self._moving_mean is None:
+            self._moving_mean = current_demand
+            self._moving_variance = torch.zeros_like(current_demand)
+        self._moving_mean = beta * self._moving_mean + (1.0 - beta) * current_demand
+        diff = current_demand - self._moving_mean
+        self._moving_variance = beta * self._moving_variance + (1.0 - beta) * diff.pow(2)
+
+    def _maybe_scale_activated_by_mean(self, activated_values):
+        """
+        Multiply activated values by EWMA mean before range scaling.
+        """
+        if activated_values is None:
+            return None
+        if (not hasattr(self, '_moving_mean') or self._moving_mean is None or
+            not hasattr(self, '_moving_variance') or self._moving_variance is None):
+            return activated_values
+        ewma_epsilon = getattr(self, '_ewma_epsilon', 1e-5)
+        mean_denom = torch.clamp(self._moving_mean, min=ewma_epsilon)
+        mean_expanded = self._expand_store_batch(mean_denom, activated_values)
+        return activated_values * mean_expanded
     
-    def prepare_inputs(self, observation):
+    def prepare_inputs(self, observation, update_ewma=True):
         """
         Prepare observation inputs by normalizing quantity-related features and then flattening.
         This method normalizes quantity-related inputs by mean demand if enabled, then flattens
@@ -114,31 +161,39 @@ class FeatureRegistry:
             # Get normalization setting from policy config
             policy_params = self.config.get('policy_network', {})
             normalize_by_mean_demand = policy_params.get('normalize_by_mean_demand', False)
+            ewma_beta = policy_params.get('ewma_beta', 0.99)
+            ewma_epsilon = 1e-5
+            self._ewma_epsilon = ewma_epsilon
             
             # Create a copy of observation to avoid modifying the original
             processed_obs = observation.copy()
             
             # Apply normalization if enabled
             if normalize_by_mean_demand and 'past_demands' in observation:
-                # Compute mean demand per sample: [batch, stores, periods] -> [batch]
-                mean_demand = observation['past_demands'].mean(dim=(1, 2))  # Mean across stores and periods
-                
-                # Stabilize normalization by clamping extreme values
-                # This prevents division by very small numbers (which causes huge scaling)
-                # and very large numbers (which causes tiny scaling)
-                mean_demand = torch.clamp(mean_demand, min=1.0, max=100.0)
-                
-                # Store normalization constant for later use
-                self._last_normalization_constant = mean_demand
-                
-                # Normalize quantity-related features
+                past_demands = observation['past_demands']
+                current_period = observation['current_period']
+                if current_period == 0:
+                    self._initialize_ewma_stats(past_demands)
+
+                if update_ewma:
+                    current_demand = None
+                    if past_demands.dim() == 3 and past_demands.size(2) > 0:
+                        current_demand = past_demands[:, :, -1]
+                    self._update_ewma_stats(current_demand, ewma_beta)
+
+                # Prepare normalization stats (mean-only scaling)
+                moving_mean = self._moving_mean
+                mean_denom = torch.clamp(moving_mean, min=ewma_epsilon)
+
+                # Normalize quantity-related features by mean
                 quantity_features = ['store_inventories', 'past_demands', 'past_arrivals', 'past_orders']
                 for feature_name in quantity_features:
                     if feature_name in processed_obs:
-                        # Use helper function to properly expand mean_demand to match feature shape
-                        mean_demand_expanded = self.expand_batch(mean_demand, processed_obs[feature_name])
-                        processed_obs[feature_name] = processed_obs[feature_name] / (mean_demand_expanded + 1e-8)
-            
+                        mean_expanded = self._expand_store_batch(mean_denom, processed_obs[feature_name])
+                        processed_obs[feature_name] = processed_obs[feature_name] / mean_expanded
+                # Expose moving mean as an optional input feature
+                if moving_mean is not None:
+                    processed_obs['moving_mean'] = moving_mean
             # Get observation keys from policy config
             observation_keys = policy_params.get('observation_keys', ['store_inventories'])
             
@@ -354,6 +409,7 @@ class FeatureRegistry:
             
             # Process the continuous values
             continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
+            continuous_values = self._maybe_scale_activated_by_mean(continuous_values)
             continuous_values = self.range_manager.scale_continuous_by_ranges(
                 continuous_values,
                 self.range_manager.get_continuous_ranges(),
@@ -440,6 +496,7 @@ class FeatureRegistry:
         
         # Process the continuous values through range scaling
         continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
+        continuous_values = self._maybe_scale_activated_by_mean(continuous_values)
         continuous_values = self.range_manager.scale_continuous_by_ranges(
             continuous_values,
             self.range_manager.get_continuous_ranges(),

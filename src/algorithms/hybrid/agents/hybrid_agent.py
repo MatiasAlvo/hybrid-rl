@@ -656,6 +656,116 @@ class OptimalMultiItem(FixedDiscreteHybridAgent):
             'vectorized_observation': processed_obs
         }
 
+class VarianceScalingAgent(FixedDiscreteHybridAgent):
+         
+    def __init__(self, config, feature_registry=None, device='cpu'):
+        super().__init__(config, feature_registry, device)
+        if self.value_net is not None:
+            with torch.no_grad():
+                self.value_net.head.weight.zero_()
+                self.value_net.head.bias.zero_()
+            print("Initialized value_net head to output zeros")
+    
+    # def value_net(self, observation, process_state=True):
+    #     if process_state:
+    #         observation = self.feature_registry.prepare_inputs(observation)
+    #     else:
+    #         observation = observation
+        
+    #     print(f'store inventories: {observation.shape}')
+    #     return torch.zeros_like(observation[:, 0])
+    #     # return torch.zeros_like(observation['store_inventories'][:, 0])
+
+    def _get_required_losses(self):
+        """HybridAgent needs all loss components."""
+        return {
+            'policy_gradient': True,   # For discrete actions
+            'value': False,             # For PPO advantage estimation
+            'pathwise': True,          # For continuous actions
+            'entropy': False            # For exploration
+        }
+    
+    def forward(self, observation, train=True):
+        """Forward pass through the agent using the new processing functions"""
+        # Prepare inputs using feature registry (normalizes and flattens)
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        
+        # Get raw outputs from policy
+        raw_outputs = self.policy(processed_obs, process_state=False)
+        
+        
+        
+        # Process discrete outputs
+        discrete_output = self.feature_registry.process_discrete_output(
+            # raw_outputs['discrete'].detach(),
+            raw_outputs['discrete'],
+            # argmax=False,  # Use argmax for inference, sample for training
+            argmax=not train,  # Use argmax for inference, sample for training
+            sample=True,      # Sample during training
+            straight_through=False
+        )
+
+        # # detach every entry in discrete_output
+        # for key in discrete_output:
+        #     discrete_output[key] = discrete_output[key].detach()
+        
+        # Process continuous outputs
+        continuous_output = self.feature_registry.process_continuous_output(
+            raw_outputs.get('continuous'),
+            continuous_mean=raw_outputs.get('continuous_mean'),
+            continuous_log_std=raw_outputs.get('continuous_log_std'),
+            random_continuous=False,  # Default to deterministic continuous actions
+            observations=observation
+        )
+        
+        current_period = observation.get('current_period', None)
+        
+        if current_period.item() == 1:
+            # print('using base stock policy')
+            n_items = observation['store_inventories'].shape[1]
+            base_stock_levels = [5.0] * n_items
+            # base_stock_levels = [7.05] * n_items
+            base_stock_output = self.base_stock_continuous_ordering_policy(
+                observation,
+                base_stock_levels
+            )
+            continuous_output['continuous_values'][..., 1] = (
+                base_stock_output['continuous_values'][..., 1]
+            )
+
+        discrete_output['discrete_probs'][:, :, 0] = 0
+        discrete_output['discrete_probs'][:, :, 1] = 1
+        
+        # Compute feature actions
+        feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
+            discrete_output['discrete_probs'],
+            continuous_output['continuous_values']
+        )
+        
+        # Combine outputs into action dictionary
+        action_dict = {
+            'discrete_probs': discrete_output['discrete_probs'],
+            'discrete_action_indices': discrete_output['discrete_action_indices'],
+            'log_probs': discrete_output['log_probs'],
+            'continuous_values': continuous_output['continuous_values'],
+            # 'raw_continuous_samples': continuous_output['raw_continuous_samples'].detach().clone(),
+            'feature_actions': feature_actions
+        }
+        
+        # Add continuous log probs if available
+        if continuous_output['continuous_log_probs'] is not None:
+            action_dict['continuous_log_probs'] = continuous_output['continuous_log_probs']
+        
+        # Get value if value network exists
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+        
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
+        }
+
 class FactoredHybridAgent(HybridAgent):
     """
     Factored hybrid agent with:

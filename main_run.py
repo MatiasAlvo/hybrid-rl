@@ -29,7 +29,8 @@ from src.algorithms.hybrid.agents.hybrid_agent import (
     FixedDiscreteHybridAgent,
     FixedContinuousHybridAgent,
     OptimalMultiItem,
-    AlternateHybridAgent
+    AlternateHybridAgent,
+    VarianceScalingAgent
 )
 
 # Data handling imports
@@ -55,6 +56,37 @@ def get_timestamp():
 def get_date_folder():
     """Get folder name based on current date"""
     return datetime.now().strftime("%Y%m%d")
+
+def apply_setting_overrides(setting_config):
+    n_stores_override = os.environ.get("SWEEP_N_STORES")
+    if n_stores_override is None:
+        return
+    if 'problem_params' not in setting_config:
+        raise ValueError("Missing problem_params in setting config for override")
+    setting_config['problem_params']['n_stores'] = int(n_stores_override)
+    print(f"Overriding n_stores from SWEEP_N_STORES: {n_stores_override}")
+
+def scale_fixed_cost_by_stores(setting_config):
+    problem_params = setting_config.get('problem_params', {})
+    n_stores = problem_params.get('n_stores', 1)
+    fixed_cost_config = (
+        problem_params
+        .get('discrete_features', {})
+        .get('fixed_ordering_cost', {})
+    )
+    if fixed_cost_config.get('_scaled_by_n_stores'):
+        return
+    values = fixed_cost_config.get('values')
+    if not isinstance(values, list):
+        return
+    scaled_values = [
+        (v * n_stores) if isinstance(v, (int, float)) else v
+        for v in values
+    ]
+    if scaled_values != values:
+        fixed_cost_config['values'] = scaled_values
+        fixed_cost_config['_scaled_by_n_stores'] = True
+        print(f"Scaled fixed_ordering_cost values by n_stores={n_stores}: {scaled_values}")
 
 def zero_continuous_parameters(model):
     """Zero out continuous parameters for debugging purposes"""
@@ -160,6 +192,9 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         mode: str, one of ['train', 'test', 'both']
     Returns: (train_metrics, test_metrics) - any can be None depending on mode
     """
+    # Ensure fixed costs are scaled before any config-dependent setup
+    scale_fixed_cost_by_stores(setting_config)
+
     # Use device from config, respecting CUDA_VISIBLE_DEVICES
     if torch.cuda.is_available():
         device = "cuda:0"
@@ -292,7 +327,8 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         'fixed_discrete_hybrid': FixedDiscreteHybridAgent,
         'fixed_continuous_hybrid': FixedContinuousHybridAgent,
         'optimal_multi_item': OptimalMultiItem,
-        'alternate_hybrid': AlternateHybridAgent
+        'alternate_hybrid': AlternateHybridAgent,
+        'variance_scaling': VarianceScalingAgent
     }
 
     # Get agent type from config, default to 'hybrid' if not specified
@@ -458,6 +494,9 @@ if __name__ == "__main__":
 
     with open(config_hyperparams_file, 'r') as file:
         hyperparams_config = yaml.safe_load(file)
+
+    apply_setting_overrides(setting_config)
+    scale_fixed_cost_by_stores(setting_config)
 
     # Run training/testing with specified mode
     train_metrics, dev_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode=mode)

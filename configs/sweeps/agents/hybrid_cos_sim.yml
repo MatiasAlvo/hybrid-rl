@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid.yml'
+  hyperparams: 'configs/policies/hybrid_cos_sim.yml'
 
 method: 'random'
 metric:
@@ -46,6 +46,7 @@ parameters:
   normalize_advantages:
     values:
       - true
+      - false
   normalize_observations:
     values:
       - false
@@ -53,6 +54,7 @@ parameters:
     values:
       - 5
       - 3
+      - 1
   pathwise_coef:
     distribution: log_uniform_values
     max: 100
@@ -91,3 +93,7 @@ parameters:
   use_wandb:
     values:
       - true 
+  disable_cross_term:
+    values:
+      - true
+      - false

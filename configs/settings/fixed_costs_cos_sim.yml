@@ -59,7 +59,7 @@ observation_params:
     'std': False
   'demand': 
     'past_periods': 16 
-    'period_shift': 16
+    'period_shift': 0
   'include_past_observations':
     'arrivals': 0
     'orders': 0
@@ -110,17 +110,17 @@ echelon_params:
 
 params_by_dataset : 
   'train': 
-    'n_samples': 1024 
-    'batch_size': 128  # Values tested: 1024, 8192
+    'n_samples': 16384 
+    'batch_size': 1024  # Values tested: 1024, 8192
     'periods': 100 
     'ignore_periods': 16 
   'dev': 
-    'n_samples': 1024 
-    'batch_size': 128 
+    'n_samples': 16384 
+    'batch_size': 1024 
     'periods': 100 
     'ignore_periods': 16 
   'test': 
-    'n_samples': 1024 
-    'batch_size': 128 
+    'n_samples': 16384 
+    'batch_size': 1024 
     'periods': 100
     'ignore_periods': 16
