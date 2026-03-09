@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_cos_sim.yml'
+  hyperparams: 'configs/policies/hybrid_separate_net.yml'
 
 method: 'random'
 metric:
@@ -8,6 +8,9 @@ metric:
   goal: 'minimize'
 
 parameters:
+  add_gumbel_noise:
+    values:
+      - false
   anneal_lr:
     values:
       - false
@@ -16,7 +19,21 @@ parameters:
       - 20
   clip_coef:
     values:
-      - 0.16
+      - 0.15
+  disable_cross_term:
+    values:
+      - true
+      - false
+  entropy_coef:
+    distribution: log_uniform_values
+    max: 10.0
+    min: 0.1
+  anneal_entropy_coef:
+    values:
+      - true
+  min_entropy_coef:
+    values:
+      - 0.001
   fixed_cost:
     distribution: categorical
     values:
@@ -27,22 +44,19 @@ parameters:
   gamma:
     values:
       - 0.93
+  hidden_layers:
+    values:
+      - [512, 512]
+      - [1024, 1024]
   learning_rate:
     values:
       - 0.002
   max_grad_norm:
     values:
-      - 10.0
+      - 5.0
   normalize_advantages:
     values:
-      - false
-  normalize_by_mean_demand:
-    values:
       - true
-  disable_cross_term:
-    values:
-      - true
-      - false
   normalize_observations:
     values:
       - false
@@ -54,7 +68,7 @@ parameters:
       - 1.0
   policy_activation:
     values:
-      - Tanh
+      - ELU
   reward_scaling:
     values:
       - true
@@ -65,20 +79,20 @@ parameters:
     values:
       - true
   value_activation:
-    values:
+    values: 
       - Tanh
   value_function_coef:
     values:
-      - 0.13
+      - 0.15
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
+    values: 
+      - 1.0
+  normalize_by_mean_demand:
     values:
-      - 5.0
+      - true
   use_wandb:
     values:
       - true
-  sweep_top_k_split_by:
-    values:
-      - "n_stores"

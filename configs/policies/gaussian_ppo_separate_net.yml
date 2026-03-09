@@ -15,15 +15,15 @@ logging_params:
   'use_tensorboard': false
   'wandb_project_name': "inventory_control"
   'wandb_entity': "alvomatias"
-  'exp_name': "factored_gaussian_ppo"
+  'exp_name': "gaussian_ppo"
   'env_name': "inventory"
   'setting_name': "one_store_fixed_costs"
-  'log_inventory_action_plot': false
-  'log_inventory_value_plot': false
-  'log_inventory_discrete_action0_prob_plot': false
+  'log_inventory_action_plot': true
+  'log_inventory_value_plot': true
+  'log_inventory_discrete_action0_prob_plot': true
 
 agent_params:
-  'agent_type': 'factored_gaussian_ppo'
+  'agent_type': 'gaussian_ppo'
   'fixed_std': true  # Set to false for state-dependent standard deviation
 
 optimizer_params:
@@ -57,9 +57,9 @@ optimizer_params:
 
 nn_params:
   policy_network:
-    name: 'factored_policy'
+    name: 'separate_network_policy'
     input_size: null  # Let it be determined automatically
-    hidden_layers: [64, 64]
+    hidden_layers: [256, 256]
     activation: 'ELU'
     # activation: 'Tanh'
     dropout: 0.0

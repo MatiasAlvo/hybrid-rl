@@ -6,7 +6,7 @@ def get_timestamp():
 
 def get_date_folder():
     """Get folder name based on current date"""
-    return datetime.now().strftime("%Y%m%d")
+    return datetime.now().strftime("%Y_%m_%d")
 
 def setup_model_paths(trainer_params, model_name):
     """Setup model saving paths and filenames"""

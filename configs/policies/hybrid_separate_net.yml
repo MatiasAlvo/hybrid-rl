@@ -1,5 +1,5 @@
 trainer_params:
-  epochs: 250
+  epochs: 500
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
@@ -9,13 +9,14 @@ trainer_params:
   load_model_path: 'models/saved_models/2025_10_22/one_store_fixed_costs/hybrid_policy/1761149697_246.pt'
   base_dir: models/saved_models
   compute_metrics_on_test: false
+  sweep_top_k: 3
 
 logging_params:
   use_wandb: true  # Overridden by sweep config
   use_tensorboard: false
   wandb_project_name: inventory_control
   wandb_entity: alvomatias
-  exp_name: hybrid
+  exp_name: hybrid_separate_net
   env_name: inventory
   setting_name: one_store_fixed_costs
   # setting_name: one_store_multi_lead_time_lost
@@ -58,7 +59,10 @@ optimizer_params:
     buffer_periods: 20  # Overridden by sweep config
     max_grad_norm: 5.0  # Overridden by sweep config
     entropy_coef: 0.0
+    anneal_entropy_coef: false
+    min_entropy_coef: 0.0
     clip_by_component: true
+    disable_cross_term: false
 
 nn_params:
   policy_network:

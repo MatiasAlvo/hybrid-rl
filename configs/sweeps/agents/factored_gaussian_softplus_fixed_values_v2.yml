@@ -1,6 +1,6 @@
-# Hybrid Agent Sweep Configuration
+# Factored Gaussian PPO Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_cos_sim.yml'
+  hyperparams: 'configs/policies/factored_gaussian_ppo.yml'
 
 method: 'random'
 metric:
@@ -10,55 +10,42 @@ metric:
 parameters:
   anneal_lr:
     values:
-      - false
+      - false  # Fixed: 100% of top performers used false
   buffer_periods:
     values:
-      - 20
+      - 20  
   clip_coef:
     values:
-      - 0.16
-  fixed_cost:
-    distribution: categorical
-    values:
-      - 64
+      - 0.15  # Fixed: median of top 20%
   gae_lambda:
     values:
-      - 0.96
+      - 0.96  # Fixed: median of top 20%
   gamma:
     values:
-      - 0.93
+      - 0.93  # Fixed: median of top 20%
   learning_rate:
     values:
-      - 0.002
+      - 0.001  # Fixed: median of top 20%
   max_grad_norm:
     values:
-      - 10.0
+      - 5.0  # Fixed: median of top 20%
   normalize_advantages:
     values:
-      - false
+      - true
   normalize_by_mean_demand:
     values:
       - true
-  disable_cross_term:
-    values:
-      - true
-      - false
+      # - false
   normalize_observations:
     values:
       - false
   num_epochs:
     values:
-      - 5
-  pathwise_coef:
-    values:
-      - 1.0
+      - 3  # Fixed: top 10% preferred 5 (57%)
   policy_activation:
     values:
-      - Tanh
+      - ELU  # Fixed: 71% of top 10% used Tanh
   reward_scaling:
-    values:
-      - true
-  reward_scaling_pathwise:
     values:
       - true
   use_gae:
@@ -69,16 +56,10 @@ parameters:
       - Tanh
   value_function_coef:
     values:
-      - 0.13
-  continuous_scale:
-    values:
-      - 1.0
-  continuous_shift:
-    values:
-      - 5.0
+      - 0.15  # Fixed: median of top 20%
   use_wandb:
     values:
       - true
-  sweep_top_k_split_by:
-    values:
-      - "n_stores"
+  continuous_shift:
+    values: 
+      - 5.0

@@ -9,6 +9,7 @@ import json
 import fcntl
 from typing import List, Optional
 from main_run import run_training
+from src.utils.path_utils import get_date_folder
 
 # Only import ray if needed (for agent runs)
 try:
@@ -61,19 +62,57 @@ def _atomic_top_k_update(lock_path, update_fn):
         update_fn()
         fcntl.flock(lock_file, fcntl.LOCK_UN)
 
+def _format_split_value(value):
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    if isinstance(value, list):
+        return "[" + ",".join(_format_split_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{...}"
+    return str(value)
+
+def _build_split_label(split_by, run_config, setting_config=None):
+    if not split_by:
+        return None
+    if isinstance(split_by, str):
+        split_by = [split_by]
+
+    parts = []
+    for key in split_by:
+        value = run_config.get(key, None)
+        if value is None and setting_config is not None:
+            value = (
+                setting_config
+                .get('problem_params', {})
+                .get(key)
+            )
+        if value is None:
+            value = "unknown"
+        value_str = _format_split_value(value)
+        label = f"{key}={value_str}"
+        label = label.replace(os.sep, "-").replace(" ", "_")
+        parts.append(label)
+
+    return "__".join(parts) if parts else None
+
 def update_sweep_top_k(
     base_dir,
     sweep_id,
     setting_name,
     policy_name,
     run_id,
+    best_metric_name,
+    best_metric_value,
     best_dev_loss,
+    best_dev_loss_reported,
     best_train_loss,
+    best_train_loss_reported,
     best_epoch,
     model_state_dict,
     optimizer_state_dict,
     top_k,
-    extra_metadata=None
+    extra_metadata=None,
+    split_label=None
 ):
     if top_k is None or top_k <= 0:
         return
@@ -82,7 +121,16 @@ def update_sweep_top_k(
         return
 
     sweep_label = sweep_id or "no_sweep"
-    top_k_dir = os.path.join(base_dir, "sweep_top_k", sweep_label, setting_name, policy_name)
+    top_k_dir = os.path.join(
+        base_dir,
+        get_date_folder(),
+        "sweep_top_k",
+        sweep_label,
+        setting_name,
+        policy_name
+    )
+    if split_label:
+        top_k_dir = os.path.join(top_k_dir, split_label)
     os.makedirs(top_k_dir, exist_ok=True)
 
     metadata_path = os.path.join(top_k_dir, "top_k_runs.json")
@@ -95,23 +143,27 @@ def update_sweep_top_k(
         # Remove any existing entry for this run (we'll re-evaluate)
         entries = [e for e in entries if e.get('run_id') != run_id]
 
-        worst_loss = max([e['best_dev_loss'] for e in entries], default=None)
-        is_candidate = (len(entries) < top_k) or (worst_loss is not None and best_dev_loss < worst_loss)
+        worst_metric = max([e['best_metric_value'] for e in entries], default=None)
+        is_candidate = (len(entries) < top_k) or (worst_metric is not None and best_metric_value < worst_metric)
 
         if not is_candidate:
             metadata['entries'] = sorted(entries, key=lambda x: x['best_dev_loss'])
             _save_top_k_metadata(metadata_path, metadata)
             return
 
-        filename = f"run_{run_id}_dev_{best_dev_loss:.6f}.pt"
+        filename = f"run_{run_id}_{best_metric_name}_{best_metric_value:.6f}.pt"
         checkpoint_path = os.path.join(top_k_dir, filename)
 
         checkpoint = {
             'epoch': best_epoch,
             'model_state_dict': model_state_dict,
             'optimizer_state_dict': optimizer_state_dict,
+            'best_metric_name': best_metric_name,
+            'best_metric_value': best_metric_value,
             'best_dev_loss': best_dev_loss,
+            'best_dev_loss_reported': best_dev_loss_reported,
             'best_train_loss': best_train_loss,
+            'best_train_loss_reported': best_train_loss_reported,
             'run_id': run_id,
             'sweep_id': sweep_id
         }
@@ -122,13 +174,17 @@ def update_sweep_top_k(
 
         entries.append({
             'run_id': run_id,
+            'best_metric_name': best_metric_name,
+            'best_metric_value': best_metric_value,
             'best_dev_loss': best_dev_loss,
+            'best_dev_loss_reported': best_dev_loss_reported,
             'best_train_loss': best_train_loss,
+            'best_train_loss_reported': best_train_loss_reported,
             'best_epoch': best_epoch,
             'checkpoint_path': checkpoint_path
         })
 
-        entries = sorted(entries, key=lambda x: x['best_dev_loss'])
+        entries = sorted(entries, key=lambda x: x['best_metric_value'])
         while len(entries) > top_k:
             removed = entries.pop()
             old_path = removed.get('checkpoint_path')
@@ -238,6 +294,8 @@ def train_sweep(sweep_config):
                 'reward_scaling_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling_pathwise']),
                 'max_grad_norm': ('hyperparams', ['optimizer_params', 'ppo_params', 'max_grad_norm']),
                 'entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'entropy_coef']),
+                'anneal_entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'anneal_entropy_coef']),
+                'min_entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'min_entropy_coef']),
                 'loss_schedule_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'loss_schedule', 'pathwise']),
                 'disable_cross_term': ('hyperparams', ['optimizer_params', 'ppo_params', 'disable_cross_term']),
                 # Unified temperature parameters
@@ -256,12 +314,15 @@ def train_sweep(sweep_config):
                 'backbone_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'backbone']),
                 'value_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'value']),
                 'other_lr_multiplier': ('hyperparams', ['optimizer_params', 'lr_multipliers', 'other']),
+                'hidden_layers': ('hyperparams', ['nn_params', 'policy_network', 'hidden_layers']),
                 'use_wandb': ('hyperparams', ['logging_params', 'use_wandb']),
                 'single_anchor_reward_scaling': ('hyperparams', ['optimizer_params', 'ppo_params', 'single_anchor_reward_scaling']),
                 # Add mapping for threshold parameter
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
                 'fixed_cost': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'values', 1]),
                 'n_stores': ('setting', ['problem_params', 'n_stores']),
+                'sweep_top_k_split_by': ('hyperparams', ['trainer_params', 'sweep_top_k_split_by']),
+                'sweep_top_k_metric': ('hyperparams', ['trainer_params', 'sweep_top_k_metric']),
             }
             
             # Update configs based on sweep parameters from run.config
@@ -295,6 +356,16 @@ def train_sweep(sweep_config):
                         while len(current) <= param_path[-1]:
                             current.append(None)
                         current[param_path[-1]] = param_value
+
+                    # Mirror shared hidden layers to value network for sweeps
+                    if param_name == 'hidden_layers' and config_type == 'hyperparams':
+                        value_network = (
+                            hyperparams_config
+                            .get('nn_params', {})
+                            .get('value_network', {})
+                        )
+                        if isinstance(value_network, dict):
+                            value_network['hidden_layers'] = param_value
 
             # Scale fixed ordering cost by number of stores after overrides
             problem_params = setting_config.get('problem_params', {})
@@ -348,6 +419,17 @@ def train_sweep(sweep_config):
             base_dir = trainer_params.get('base_dir', 'models/saved_models')
             setting_name = setting_config.get('problem_params', {}).get('setting_name', 'unknown_setting')
             policy_name = hyperparams_config.get('nn_params', {}).get('policy_network', {}).get('name', 'unknown_policy')
+            split_label = _build_split_label(
+                trainer_params.get('sweep_top_k_split_by'),
+                run.config,
+                setting_config=setting_config
+            )
+            metric_name = trainer_params.get('sweep_top_k_metric', 'dev_loss_reported')
+            metric_value = best_performance.get(metric_name)
+            if metric_value is None:
+                metric_value = best_performance.get('dev_loss_reported')
+            if metric_value is None:
+                metric_value = best_performance.get('dev_loss', float('inf'))
 
             update_sweep_top_k(
                 base_dir=base_dir,
@@ -355,8 +437,12 @@ def train_sweep(sweep_config):
                 setting_name=setting_name,
                 policy_name=policy_name,
                 run_id=run.id,
+                best_metric_name=metric_name,
+                best_metric_value=metric_value,
                 best_dev_loss=best_performance.get('dev_loss', float('inf')),
+                best_dev_loss_reported=best_performance.get('dev_loss_reported', float('inf')),
                 best_train_loss=best_performance.get('train_loss', float('inf')),
+                best_train_loss_reported=best_performance.get('train_loss_reported', float('inf')),
                 best_epoch=best_performance.get('best_epoch'),
                 model_state_dict=best_performance.get('model_params_to_save'),
                 optimizer_state_dict=best_performance.get('optimizer_state_to_save'),
@@ -364,7 +450,8 @@ def train_sweep(sweep_config):
                 extra_metadata={
                     'config_files': config_files,
                     'wandb_name': run.name
-                }
+                },
+                split_label=split_label
             )
             
         except Exception as e:

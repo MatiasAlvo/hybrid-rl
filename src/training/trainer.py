@@ -33,6 +33,8 @@ class Trainer():
         self.best_performance_data = {
             'train_loss': np.inf,
             'dev_loss': np.inf,
+            'train_loss_reported': np.inf,
+            'dev_loss_reported': np.inf,
             'last_epoch_saved': -1000,
             'model_params_to_save': None,
             'optimizer_state_to_save': None,
@@ -67,6 +69,8 @@ class Trainer():
         optimizer_params = config.hyperparams_config.get('optimizer_params', {})
         initial_lr = optimizer_params.get('learning_rate', 0.0003)
         anneal_lr = optimizer_params.get('anneal_lr', False)
+        ppo_params = optimizer_params.get('ppo_params', {})
+        anneal_entropy_coef = ppo_params.get('anneal_entropy_coef', False)
         
         for epoch in range(epochs):
             skip_update_every = optimizer_params.get('skip_update_every_n_epochs', 0)
@@ -85,6 +89,11 @@ class Trainer():
                 # Log LR if logger exists
                 if self.logger is not None:
                     self.logger.log_metrics({'train/learning_rate': new_lr}, epoch)
+            
+            if hasattr(optimizer_wrapper, 'update_entropy_coef'):
+                current_entropy_coef = optimizer_wrapper.update_entropy_coef(epoch, epochs)
+                if anneal_entropy_coef and self.logger is not None:
+                    self.logger.log_metrics({'train/entropy_coef': current_entropy_coef}, epoch)
             
             # Training epoch
             train_metrics = self.do_one_epoch(
@@ -174,11 +183,13 @@ class Trainer():
             
             # Update best parameters and save if needed
             self.update_best_params_and_save(
-                epoch, 
-                train_metrics['loss/total'], 
+                epoch,
+                train_metrics['loss/total'],
                 dev_metrics['loss/total'],
-                trainer_params, 
-                model, 
+                train_metrics['loss/reported'],
+                dev_metrics['loss/reported'],
+                trainer_params,
+                model,
                 optimizer_wrapper.optimizer
             )
             
@@ -660,14 +671,31 @@ class Trainer():
             self.create_folder_if_not_exists(path)
         return path
     
-    def update_best_params_and_save(self, epoch, train_loss, dev_loss, trainer_params, model, optimizer):
+    def update_best_params_and_save(
+        self,
+        epoch,
+        train_loss,
+        dev_loss,
+        train_loss_reported,
+        dev_loss_reported,
+        trainer_params,
+        model,
+        optimizer
+    ):
         """
         Update best model parameters if it achieves best performance so far, and save the model
         """
-        data_for_compare = {'train_loss': train_loss, 'dev_loss': dev_loss}
+        data_for_compare = {
+            'train_loss': train_loss,
+            'dev_loss': dev_loss,
+            'train_loss_reported': train_loss_reported,
+            'dev_loss_reported': dev_loss_reported
+        }
         if data_for_compare[trainer_params['choose_best_model_on']] < self.best_performance_data[trainer_params['choose_best_model_on']]:  
             self.best_performance_data['train_loss'] = train_loss
             self.best_performance_data['dev_loss'] = dev_loss
+            self.best_performance_data['train_loss_reported'] = train_loss_reported
+            self.best_performance_data['dev_loss_reported'] = dev_loss_reported
             self.best_performance_data['best_epoch'] = epoch
             if model.trainable:
                 # Save the entire model's state dict instead of just the policy

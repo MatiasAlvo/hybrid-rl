@@ -28,6 +28,7 @@ from src.algorithms.hybrid.agents.hybrid_agent import (
     FactoredHybridAgent,
     FixedDiscreteHybridAgent,
     FixedContinuousHybridAgent,
+    TrainableBaseStockHybridAgent,
     OptimalMultiItem,
     AlternateHybridAgent,
     VarianceScalingAgent
@@ -55,7 +56,7 @@ def get_timestamp():
 
 def get_date_folder():
     """Get folder name based on current date"""
-    return datetime.now().strftime("%Y%m%d")
+    return datetime.now().strftime("%Y_%m_%d")
 
 def apply_setting_overrides(setting_config):
     n_stores_override = os.environ.get("SWEEP_N_STORES")
@@ -107,6 +108,37 @@ def zero_continuous_parameters(model):
             print(f"  - {name} (shape: {param.shape})")
     else:
         print(f"✅ Successfully zeroed {continuous_params_count} continuous parameters")
+
+def reset_param_groups(model, optimizer, groups):
+    """Reset parameters for named groups and clear optimizer state."""
+    if not groups:
+        return
+    if isinstance(groups, str):
+        groups = [groups]
+    group_keys = [g.lower() for g in groups]
+
+    matched_params = set()
+    reset_modules = 0
+    for name, module in model.named_modules():
+        if not name:
+            continue
+        lowered = name.lower()
+        if any(key in lowered for key in group_keys):
+            if hasattr(module, 'reset_parameters'):
+                module.reset_parameters()
+                reset_modules += 1
+                for param in module.parameters(recurse=False):
+                    matched_params.add(param)
+
+    if optimizer is not None and matched_params:
+        for param in matched_params:
+            if param in optimizer.state:
+                optimizer.state[param].clear()
+
+    if reset_modules == 0:
+        print(f"⚠️  WARNING: No modules matched reset groups: {groups}")
+    else:
+        print(f"✅ Reset {reset_modules} modules for groups: {groups}")
 
 def create_parameter_groups_with_lr(model, base_lr, lr_multipliers):
     """Create parameter groups with different learning rate multipliers"""
@@ -183,6 +215,23 @@ def create_parameter_groups_with_lr(model, base_lr, lr_multipliers):
     
     return param_groups
 
+def apply_lr_multipliers_to_optimizer(optimizer, base_lr, lr_multipliers):
+    """Re-apply learning rate multipliers to an existing optimizer."""
+    name_to_multiplier = {
+        'value': lr_multipliers.get('value', 1.0),
+        'backbone': lr_multipliers.get('backbone', 1.0),
+        'continuous': lr_multipliers.get('continuous', 1.0),
+        'discrete': lr_multipliers.get('discrete', 1.0),
+        'other': lr_multipliers.get('other', 1.0)
+    }
+
+    for group in optimizer.param_groups:
+        group_name = group.get('name')
+        if group_name in name_to_multiplier:
+            group['lr'] = base_lr * name_to_multiplier[group_name]
+        else:
+            group['lr'] = base_lr * name_to_multiplier['other']
+
 def run_training(setting_config, hyperparams_config, mode='both', return_best_state=False):
     """
     Run training and/or testing with given configurations
@@ -228,6 +277,10 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
     optimizer_params = config.hyperparams_config['optimizer_params']
     nn_params = config.hyperparams_config['nn_params']
     agent_params = config.hyperparams_config['agent_params']
+
+    # Prefer reported dev loss for best-model selection by default
+    if trainer_params.get('choose_best_model_on') in (None, 'dev_loss'):
+        trainer_params['choose_best_model_on'] = 'dev_loss_reported'
 
     feature_registry = None
     # Initialize range manager if this is a hybrid problem
@@ -326,6 +379,7 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         'factored_hybrid': FactoredHybridAgent,
         'fixed_discrete_hybrid': FixedDiscreteHybridAgent,
         'fixed_continuous_hybrid': FixedContinuousHybridAgent,
+        'trainable_base_stock_hybrid': TrainableBaseStockHybridAgent,
         'optimal_multi_item': OptimalMultiItem,
         'alternate_hybrid': AlternateHybridAgent,
         'variance_scaling': VarianceScalingAgent
@@ -394,10 +448,15 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         checkpoint = torch.load(trainer_params['load_model_path'], weights_only=True)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        apply_lr_multipliers_to_optimizer(optimizer, optimizer_params['learning_rate'], lr_multipliers)
         print("Model loaded successfully")
         
         # # Zero out continuous parameters for debugging
         # zero_continuous_parameters(model)
+
+    reset_groups = trainer_params.get('reset_param_groups')
+    if reset_groups:
+        reset_param_groups(model, optimizer, reset_groups)
 
     # Initialize simulator based on type
     simulator = (HybridSimulator(feature_registry, model=model, device=device) 

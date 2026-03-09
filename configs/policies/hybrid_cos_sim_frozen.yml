@@ -1,15 +1,24 @@
 trainer_params:
-  epochs: 500
+  epochs: 400
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
   epochs_between_save: 1
   choose_best_model_on: dev_loss
-  load_previous_model: False
-  load_model_path: 'models/saved_models/2025_10_22/one_store_fixed_costs/hybrid_policy/1761149697_246.pt'
+  load_previous_model: true
+  # load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=1/run_okier22n_dev_loss_reported_37.140926.pt'
+  # load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=2/run_s9717v6j_dev_loss_reported_38.160743.pt'
+  # load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=3/run_z2d2xz3h_dev_loss_reported_38.576783.pt'
+  # load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=5/run_d04hy4pq_dev_loss_reported_38.809959.pt'
+  # load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=7/run_k6w6wk69_dev_loss_reported_39.274086.pt'
+  # load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=10/run_qo40rabc_dev_loss_reported_38.935593.pt'
+  # load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=15/run_g1650rf8_dev_loss_reported_39.012901.pt'
+  load_model_path: 'models/saved_models/2026_03_04/sweep_top_k/fvsc1iiu/one_store_fixed_costs/separate_network_policy/n_stores=20/run_14ysk2tv_dev_loss_reported_42.710122.pt'
+  # load_model_path: 'models/saved_models/2025_10_22/one_store_fixed_costs/hybrid_policy/1761149697_246.pt'
   base_dir: models/saved_models
   compute_metrics_on_test: false
   sweep_top_k: 1
+  reset_param_groups: ["discrete"]
 
 logging_params:
   use_wandb: true  # Overridden by sweep config
@@ -35,49 +44,50 @@ agent_params:
   add_gumbel_noise: false
 
 optimizer_params:
-  # learning_rate: 0.01  # Overridden by sweep config
-  learning_rate: 0.003  # Overridden by sweep config
+  learning_rate: 0.00001  # Overridden by sweep config
   anneal_lr: false  # Overridden by sweep config
   weight_decay: 0.0
-  skip_update_every_n_epochs: 10
+  skip_update_every_n_epochs: 2
   lr_multipliers:
     value: 1.0
     backbone: 1.0
-    continuous: 1.0
+    continuous: 0.0
     discrete: 1.0
     other: 1.0
   ppo_params:
     clip_coef: 0.16  # Overridden by sweep config
     gamma: 0.93  # Overridden by sweep config
+    reinforce_gamma: 0.995
     gae_lambda: 0.96  # Overridden by sweep config
-    normalize_advantages: true  # Overridden by sweep config
+    normalize_advantages: false  # Overridden by sweep config
     use_gae: true  # Overridden by sweep config
-    num_epochs: 5  # Overridden by sweep config
+    num_epochs: 1  # Overridden by sweep config
     value_function_coef: 0.13  # Overridden by sweep config
-    pathwise_coef: 10.0  # Overridden by sweep config
+    pathwise_coef: 1.0  # Overridden by sweep config
     reward_scaling_pathwise: true  # Overridden by sweep config
     reward_scaling: true  # Overridden by sweep config
     buffer_periods: 20  # Overridden by sweep config
-    max_grad_norm: 5.0  # Overridden by sweep config
+    max_grad_norm: 10.0  # Overridden by sweep config
     entropy_coef: 0.0
     clip_by_component: true
-    disable_cross_term: false
+    disable_cross_term: true
     cosine_grad_analysis: true
+    num_minibatches: 1
+    use_reinforce_loss: true
 
 nn_params:
   policy_network:
     name: separate_network_policy
     # name: hybrid_policy
     input_size: null
-    # hidden_layers: [64, 64]
-    hidden_layers: [128, 128]
+    hidden_layers: [64, 64]
     activation: Tanh  # Overridden by sweep config (policy_activation)
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0  # Overridden by sweep config
-    continuous_shift: 5.0  # Overridden by sweep config
+    continuous_shift: 10.0  # on original training: 5.0
     observation_keys: ['store_inventories']
-    normalize_by_mean_demand: False
+    normalize_by_mean_demand: true
     heads:
       discrete:
         enabled: true

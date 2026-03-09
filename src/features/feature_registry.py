@@ -65,6 +65,10 @@ class FeatureRegistry:
             return None
         
         batch_size = raw_continuous_samples.shape[0]
+        if (raw_continuous_samples.dim() == 3 and
+            raw_continuous_samples.shape[1] == self.n_stores and
+            raw_continuous_samples.shape[2] == self.n_sub_ranges):
+            return raw_continuous_samples
         
         if raw_continuous_samples.dim() == 3:
             # Shape is [batch, 1, n_stores * n_sub_ranges], take first slice and reshape

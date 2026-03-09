@@ -807,10 +807,16 @@ class FactoredPolicy(PolicyNetwork):
         out = self.continuous_head(features)
         
         if include_std:
-            # Output includes both mean and log_std
-            n_continuous = out.size(-1) // 2
-            mean_part = out[..., :n_continuous]
-            log_std_part = out[..., n_continuous:]
+            # Output includes mean and log_std
+            if out.size(-1) % 2 == 0:
+                # Mean and log_std have the same size
+                n_continuous = out.size(-1) // 2
+                mean_part = out[..., :n_continuous]
+                log_std_part = out[..., n_continuous:]
+            else:
+                # Mean vector + scalar log_std
+                mean_part = out[..., :-1]
+                log_std_part = out[..., -1:]
             
             # Apply scale/shift to mean part
             mean_transformed = mean_part * self.continuous_scale + self.continuous_shift
@@ -820,7 +826,7 @@ class FactoredPolicy(PolicyNetwork):
             
             # Print warning on first call
             if not hasattr(self, '_std_warning_printed'):
-                print("WARNING: Applying transformations to continuous output - scale/shift to first half, subtract 1 to second half")
+                print("WARNING: Applying transformations to continuous output - scale/shift to mean, subtract 1 to log_std")
                 self._std_warning_printed = True
             
             # Concatenate mean and log_std

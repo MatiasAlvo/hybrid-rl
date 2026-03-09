@@ -29,7 +29,7 @@ parameters:
       - 0.93  # Fixed: median of top performers
   learning_rate:
     values:
-      - 0.003  # Fixed: median of top performers
+      - 0.001  # Fixed: median of top performers
   max_grad_norm:
     values:
       - 5.0  # Fixed: median of top performers
@@ -40,7 +40,10 @@ parameters:
   normalize_by_mean_demand:
     values:
       - true
+  disable_cross_term:
+    values:
       - false
+      - true
   normalize_observations:
     values:
       - false
@@ -49,7 +52,8 @@ parameters:
       - 5  # Fixed: median of top performers
   pathwise_coef:
     values:
-      - 10.0  # Fixed: median of top performers
+      - 1.0  # Fixed: median of top performers
+      - 5.0  # Fixed: median of top performers
   policy_activation:
     values:
       - Tanh  # Fixed: 90% of top performers used Tanh

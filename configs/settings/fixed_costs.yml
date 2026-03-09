@@ -36,7 +36,7 @@ sample_data_params:
 
 problem_params: 
   'setting_name': "one_store_fixed_costs"
-  'n_stores': 3
+  'n_stores': 1
   'n_warehouses': 0
   'n_extra_echelons': 0
   'lost_demand': false

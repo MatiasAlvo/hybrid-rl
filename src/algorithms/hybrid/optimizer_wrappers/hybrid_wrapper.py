@@ -43,6 +43,11 @@ class HybridWrapper(BaseOptimizerWrapper):
     def __init__(self, model, optimizer, problem_params, device='cpu', ppo_params=None):
         super().__init__(model, optimizer, problem_params, device)
         self.ppo_params = ppo_params or {}  # Use empty dict if no params provided
+        self.initial_entropy_coef = float(self.ppo_params.get('entropy_coef', 0.0))
+        self.min_entropy_coef = float(self.ppo_params.get('min_entropy_coef', self.initial_entropy_coef))
+        self.anneal_entropy_coef = bool(self.ppo_params.get('anneal_entropy_coef', False))
+        self.entropy_coef = self.initial_entropy_coef
+        self.ppo_params['entropy_coef'] = self.entropy_coef
         self.cosine_grad_analysis = self.ppo_params.get('cosine_grad_analysis', False)
         self._cosine_grad_buffers = None
         self._last_cosine_metrics = {}
@@ -144,6 +149,29 @@ class HybridWrapper(BaseOptimizerWrapper):
             self._cosine_grad_buffers = {}
         else:
             self._cosine_grad_buffers = None
+
+    def update_entropy_coef(self, epoch, total_epochs):
+        """Linearly anneal entropy coefficient over training epochs."""
+        if not self.anneal_entropy_coef:
+            return self.entropy_coef
+        if total_epochs <= 1:
+            self.entropy_coef = self.min_entropy_coef
+            self.ppo_params['entropy_coef'] = self.entropy_coef
+            return self.entropy_coef
+
+        denom = max(total_epochs - 1, 1)
+        progress = epoch / denom
+        new_entropy_coef = (
+            self.initial_entropy_coef
+            + (self.min_entropy_coef - self.initial_entropy_coef) * progress
+        )
+        if self.initial_entropy_coef >= self.min_entropy_coef:
+            new_entropy_coef = max(new_entropy_coef, self.min_entropy_coef)
+        else:
+            new_entropy_coef = min(new_entropy_coef, self.min_entropy_coef)
+        self.entropy_coef = new_entropy_coef
+        self.ppo_params['entropy_coef'] = self.entropy_coef
+        return self.entropy_coef
     
     def on_epoch_end(self):
         """Advance loss schedule at the end of an epoch."""
@@ -587,6 +615,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             'loss/pathwise': total_pathwise_loss / num_updates,
             'loss/entropy': total_entropy_loss / num_updates,
         }
+        metrics['entropy/coef'] = self.ppo_params.get('entropy_coef', self.entropy_coef)
         
         # Only include policy metrics if policy gradient is used
         if self.required_losses['policy_gradient']:
@@ -825,13 +854,28 @@ class HybridWrapper(BaseOptimizerWrapper):
     def _record_cosine_gradients(self, loss_name):
         if not self.cosine_grad_analysis or self._cosine_grad_buffers is None:
             return
-        heads_layers = getattr(getattr(self.model, 'policy', None), 'heads_layers', None)
-        if heads_layers is None:
+        policy = getattr(self.model, 'policy', None)
+        if policy is None:
             return
-        for head_name in ('continuous', 'discrete'):
-            if head_name not in heads_layers:
-                continue
-            head = heads_layers[head_name]
+
+        heads_layers = getattr(policy, 'heads_layers', None)
+        if heads_layers is not None:
+            head_sources = {
+                name: heads_layers[name]
+                for name in ('continuous', 'discrete')
+                if name in heads_layers
+            }
+        else:
+            # SeparateNetworkPolicy uses discrete_head/continuous_head
+            head_sources = {}
+            discrete_head = getattr(policy, 'discrete_head', None)
+            continuous_head = getattr(policy, 'continuous_head', None)
+            if discrete_head is not None:
+                head_sources['discrete'] = discrete_head
+            if continuous_head is not None:
+                head_sources['continuous'] = continuous_head
+
+        for head_name, head in head_sources.items():
             if not hasattr(head, 'weight') or head.weight.grad is None:
                 continue
             grad_vec = head.weight.grad.detach().flatten().cpu()
@@ -873,8 +917,6 @@ class HybridWrapper(BaseOptimizerWrapper):
             vec_norms = stacked.norm(dim=1) + 1e-8
             cosines = (stacked @ true_vec) / (vec_norms * true_norm)
             metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
-            metrics[f'cosine/{prefix}/min'] = cosines.min().item()
-            metrics[f'cosine/{prefix}/max'] = cosines.max().item()
 
         def add_against_combined_true(prefix, key_query, key_a, key_b):
             vecs_query = self._cosine_grad_buffers.get(key_query)
@@ -893,8 +935,26 @@ class HybridWrapper(BaseOptimizerWrapper):
             query_norms = query_stack.norm(dim=1) + 1e-8
             cosines = (query_stack @ true_vec) / (query_norms * true_norm)
             metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
-            metrics[f'cosine/{prefix}/min'] = cosines.min().item()
-            metrics[f'cosine/{prefix}/max'] = cosines.max().item()
+
+        def add_combined_vs_combined_true(prefix, key_q_a, key_q_b, key_t_a, key_t_b):
+            vecs_q_a = self._cosine_grad_buffers.get(key_q_a)
+            vecs_q_b = self._cosine_grad_buffers.get(key_q_b)
+            vecs_t_a = self._cosine_grad_buffers.get(key_t_a)
+            vecs_t_b = self._cosine_grad_buffers.get(key_t_b)
+            if not vecs_q_a or not vecs_q_b or not vecs_t_a or not vecs_t_b:
+                return
+            n = min(len(vecs_q_a), len(vecs_q_b), len(vecs_t_a), len(vecs_t_b))
+            if n == 0:
+                return
+            query_combined = [vecs_q_a[i] + vecs_q_b[i] for i in range(n)]
+            true_combined = [vecs_t_a[i] + vecs_t_b[i] for i in range(n)]
+            query_stack = torch.stack(query_combined)
+            true_stack = torch.stack(true_combined)
+            true_vec = true_stack.sum(dim=0)
+            true_norm = true_vec.norm() + 1e-8
+            query_norms = query_stack.norm(dim=1) + 1e-8
+            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
+            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
 
         def add_against_true(prefix, key_query, key_true):
             vecs_query = self._cosine_grad_buffers.get(key_query)
@@ -910,8 +970,6 @@ class HybridWrapper(BaseOptimizerWrapper):
             query_norms = query_stack.norm(dim=1) + 1e-8
             cosines = (query_stack @ true_vec) / (query_norms * true_norm)
             metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
-            metrics[f'cosine/{prefix}/min'] = cosines.min().item()
-            metrics[f'cosine/{prefix}/max'] = cosines.max().item()
         
         add_combined('continuous/reinforce_plus_pathwise', 'continuous/reinforce', 'continuous/pathwise')
         add_combined('continuous/policy_plus_pathwise', 'continuous/policy', 'continuous/pathwise')
@@ -936,6 +994,13 @@ class HybridWrapper(BaseOptimizerWrapper):
             'continuous/policy_vs_reinforce_true',
             'continuous/policy',
             'continuous/reinforce'
+        )
+        add_combined_vs_combined_true(
+            'continuous/policy_plus_pathwise_vs_reinforce_plus_pathwise',
+            'continuous/policy',
+            'continuous/pathwise',
+            'continuous/reinforce',
+            'continuous/pathwise'
         )
         return metrics
 

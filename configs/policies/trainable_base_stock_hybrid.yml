@@ -1,5 +1,5 @@
 trainer_params:
-  epochs: 500
+  epochs: 250
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
@@ -9,25 +9,23 @@ trainer_params:
   load_model_path: 'models/saved_models/2025_10_22/one_store_fixed_costs/hybrid_policy/1761149697_246.pt'
   base_dir: models/saved_models
   compute_metrics_on_test: false
-  sweep_top_k: 1
 
 logging_params:
-  use_wandb: true  # Overridden by sweep config
+  use_wandb: true
   use_tensorboard: false
   wandb_project_name: inventory_control
   wandb_entity: alvomatias
-  exp_name: hybrid_cos_sim
+  exp_name: trainable_base_stock
   env_name: inventory
   setting_name: one_store_fixed_costs
-  # setting_name: one_store_multi_lead_time_lost
-  # setting_name: fixed_costs_not_at_zero
   log_inventory_action_plot: true
   log_inventory_value_plot: true
   log_inventory_discrete_action0_prob_plot: true
   normalize_plots_by_mean_demand: false
 
 agent_params:
-  agent_type: hybrid
+  agent_type: trainable_base_stock_hybrid
+  fixed_base_stock_level: 62
   initial_temperature: 1.0
   min_temperature: 0.001
   temperature_decay: 0.997
@@ -35,11 +33,9 @@ agent_params:
   add_gumbel_noise: false
 
 optimizer_params:
-  # learning_rate: 0.01  # Overridden by sweep config
-  learning_rate: 0.003  # Overridden by sweep config
-  anneal_lr: false  # Overridden by sweep config
+  learning_rate: 0.003
+  anneal_lr: false
   weight_decay: 0.0
-  skip_update_every_n_epochs: 10
   lr_multipliers:
     value: 1.0
     backbone: 1.0
@@ -47,35 +43,31 @@ optimizer_params:
     discrete: 1.0
     other: 1.0
   ppo_params:
-    clip_coef: 0.16  # Overridden by sweep config
-    gamma: 0.93  # Overridden by sweep config
-    gae_lambda: 0.96  # Overridden by sweep config
-    normalize_advantages: true  # Overridden by sweep config
-    use_gae: true  # Overridden by sweep config
-    num_epochs: 5  # Overridden by sweep config
-    value_function_coef: 0.13  # Overridden by sweep config
-    pathwise_coef: 10.0  # Overridden by sweep config
-    reward_scaling_pathwise: true  # Overridden by sweep config
-    reward_scaling: true  # Overridden by sweep config
-    buffer_periods: 20  # Overridden by sweep config
-    max_grad_norm: 5.0  # Overridden by sweep config
+    clip_coef: 0.16
+    gamma: 0.93
+    gae_lambda: 0.96
+    normalize_advantages: true
+    use_gae: true
+    num_epochs: 5
+    value_function_coef: 0.13
+    pathwise_coef: 10.0
+    reward_scaling_pathwise: true
+    reward_scaling: true
+    buffer_periods: 20
+    max_grad_norm: 5.0
     entropy_coef: 0.0
     clip_by_component: true
-    disable_cross_term: false
-    cosine_grad_analysis: true
 
 nn_params:
   policy_network:
-    name: separate_network_policy
-    # name: hybrid_policy
+    name: hybrid_policy
     input_size: null
-    # hidden_layers: [64, 64]
-    hidden_layers: [128, 128]
-    activation: Tanh  # Overridden by sweep config (policy_activation)
+    hidden_layers: [64, 64]
+    activation: Tanh
     dropout: 0.0
     batch_norm: false
-    continuous_scale: 1.0  # Overridden by sweep config
-    continuous_shift: 5.0  # Overridden by sweep config
+    continuous_scale: 1.0
+    continuous_shift: 5.0
     observation_keys: ['store_inventories']
     normalize_by_mean_demand: False
     heads:
@@ -92,7 +84,7 @@ nn_params:
     enabled: true
     input_size: 2
     hidden_layers: [64, 64]
-    activation: Tanh  # Overridden by sweep config (value_activation)
+    activation: Tanh
     dropout: 0.0
     batch_norm: false
     output_size: 1

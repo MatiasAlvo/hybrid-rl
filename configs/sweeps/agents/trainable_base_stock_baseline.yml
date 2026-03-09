@@ -1,6 +1,6 @@
-# Hybrid Agent Sweep Configuration
+# Trainable Base-Stock Baseline Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_cos_sim.yml'
+  hyperparams: 'configs/policies/trainable_base_stock_hybrid.yml'
 
 method: 'random'
 metric:
@@ -29,36 +29,31 @@ parameters:
       - 0.93
   learning_rate:
     values:
-      - 0.002
+      - 0.001
   max_grad_norm:
     values:
-      - 10.0
+      - 5.0
   normalize_advantages:
     values:
+      - true
       - false
   normalize_by_mean_demand:
     values:
       - true
   disable_cross_term:
     values:
-      - true
       - false
+      - true
   normalize_observations:
     values:
       - false
   num_epochs:
     values:
       - 5
-  pathwise_coef:
-    values:
-      - 1.0
   policy_activation:
     values:
       - Tanh
   reward_scaling:
-    values:
-      - true
-  reward_scaling_pathwise:
     values:
       - true
   use_gae:
@@ -70,15 +65,6 @@ parameters:
   value_function_coef:
     values:
       - 0.13
-  continuous_scale:
-    values:
-      - 1.0
-  continuous_shift:
-    values:
-      - 5.0
   use_wandb:
     values:
       - true
-  sweep_top_k_split_by:
-    values:
-      - "n_stores"

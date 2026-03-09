@@ -59,6 +59,7 @@ optimizer_params:
     max_grad_norm: 5.0  # Overridden by sweep config
     entropy_coef: 0.0
     clip_by_component: true
+    disable_cross_term: false
 
 nn_params:
   policy_network:
