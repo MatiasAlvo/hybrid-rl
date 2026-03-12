@@ -40,7 +40,16 @@ class BaseOptimizerWrapper:
         raise NotImplementedError 
 
 class HybridWrapper(BaseOptimizerWrapper):
-    def __init__(self, model, optimizer, problem_params, device='cpu', ppo_params=None):
+    def __init__(
+        self,
+        model,
+        optimizer,
+        problem_params,
+        device='cpu',
+        ppo_params=None,
+        base_lr=None,
+        lr_multipliers=None
+    ):
         super().__init__(model, optimizer, problem_params, device)
         self.ppo_params = ppo_params or {}  # Use empty dict if no params provided
         self.initial_entropy_coef = float(self.ppo_params.get('entropy_coef', 0.0))
@@ -63,6 +72,11 @@ class HybridWrapper(BaseOptimizerWrapper):
             print("🔓 Enabling cross-term in policy loss")
         self._warned_num_minibatches = False
         self.skip_update = False
+
+        # Learning rate multipliers (optional warmup override)
+        self.base_learning_rate = base_lr
+        self.lr_multipliers = lr_multipliers
+        self._active_lr_multipliers = None
         
         # Optional loss schedule for alternating optimization phases
         self.loss_schedule = self._init_loss_schedule(self.ppo_params.get('loss_schedule'))
@@ -88,23 +102,22 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         policy_epochs = int(loss_schedule.get('policy_value', 0))
         pathwise_epochs = int(loss_schedule.get('pathwise', 0))
-        start_phase = loss_schedule.get('start_phase', 'policy_value')
-        warmup_policy_value_epochs = int(loss_schedule.get('warmup_policy_value_epochs', 0))
+        warmup_epochs = int(loss_schedule.get('warmup_epochs', 0))
+        warmup_lr_multipliers = loss_schedule.get('warmup_lr_multipliers')
         
-        if policy_epochs < 0 or pathwise_epochs < 0 or warmup_policy_value_epochs < 0:
+        if policy_epochs < 0 or pathwise_epochs < 0 or warmup_epochs < 0:
             raise ValueError("loss_schedule epoch counts must be >= 0")
         
-        if policy_epochs == 0 and pathwise_epochs == 0:
+        if warmup_epochs == 0 and policy_epochs == 0 and pathwise_epochs == 0:
             return None
-        
-        if start_phase not in ('policy_value', 'pathwise'):
-            raise ValueError("loss_schedule start_phase must be 'policy_value' or 'pathwise'")
+        if warmup_lr_multipliers is not None and not isinstance(warmup_lr_multipliers, dict):
+            raise ValueError("loss_schedule warmup_lr_multipliers must be a dict or None")
         
         return {
             'policy_value': policy_epochs,
             'pathwise': pathwise_epochs,
-            'start_phase': start_phase,
-            'warmup_policy_value_epochs': warmup_policy_value_epochs
+            'warmup_epochs': warmup_epochs,
+            'warmup_lr_multipliers': warmup_lr_multipliers
         }
     
     def _set_required_losses_for_epoch(self, epoch):
@@ -114,32 +127,75 @@ class HybridWrapper(BaseOptimizerWrapper):
         
         policy_epochs = self.loss_schedule['policy_value']
         pathwise_epochs = self.loss_schedule['pathwise']
-        start_phase = self.loss_schedule['start_phase']
-        warmup_policy_value_epochs = self.loss_schedule['warmup_policy_value_epochs']
+        warmup_epochs = self.loss_schedule['warmup_epochs']
         
-        if epoch < warmup_policy_value_epochs:
-            phase = 'policy_value'
+        if policy_epochs == 0 and pathwise_epochs == 0:
+            phase = 'full'
         elif policy_epochs == 0:
             phase = 'pathwise'
         elif pathwise_epochs == 0:
             phase = 'policy_value'
         else:
             cycle = policy_epochs + pathwise_epochs
-            offset = (epoch - warmup_policy_value_epochs) % cycle
-            if start_phase == 'policy_value':
-                phase = 'policy_value' if offset < policy_epochs else 'pathwise'
-            else:
-                phase = 'pathwise' if offset < pathwise_epochs else 'policy_value'
+            offset = epoch % cycle
+            phase = 'policy_value' if offset < policy_epochs else 'pathwise'
         
         required = copy.deepcopy(self.base_required_losses)
         if phase == 'policy_value':
             required['pathwise'] = False
-        else:
+        elif phase == 'pathwise':
             required['policy_gradient'] = False
             required['value'] = False
             required['entropy'] = False
         
         self.required_losses = required
+        self._update_lr_multipliers_for_epoch(epoch, warmup_epochs)
+
+    def _update_lr_multipliers_for_epoch(self, epoch, warmup_epochs):
+        if self.base_learning_rate is None:
+            return
+        warmup_lr_multipliers = None
+        if self.loss_schedule is not None:
+            warmup_lr_multipliers = self.loss_schedule.get('warmup_lr_multipliers')
+        if warmup_lr_multipliers is not None and epoch < warmup_epochs:
+            target_multipliers = warmup_lr_multipliers
+        else:
+            target_multipliers = self.lr_multipliers
+        self._apply_lr_multipliers(target_multipliers)
+
+    def _apply_lr_multipliers(self, lr_multipliers):
+        if lr_multipliers is None:
+            return
+        if not isinstance(lr_multipliers, dict):
+            raise ValueError("lr_multipliers must be a dict or None")
+        name_to_multiplier = {
+            'value': lr_multipliers.get('value', 1.0),
+            'backbone': lr_multipliers.get('backbone', 1.0),
+            'continuous': lr_multipliers.get('continuous', 1.0),
+            'discrete': lr_multipliers.get('discrete', 1.0),
+            'other': lr_multipliers.get('other', 1.0)
+        }
+
+        if self._active_lr_multipliers == lr_multipliers:
+            lrs_match = True
+            for group in self.optimizer.param_groups:
+                group_name = group.get('name')
+                multiplier = name_to_multiplier.get(group_name, name_to_multiplier['other'])
+                expected_lr = self.base_learning_rate * multiplier
+                if abs(group.get('lr', expected_lr) - expected_lr) > 1e-12:
+                    lrs_match = False
+                    break
+            if lrs_match:
+                return
+
+        for group in self.optimizer.param_groups:
+            group_name = group.get('name')
+            if group_name in name_to_multiplier:
+                group['lr'] = self.base_learning_rate * name_to_multiplier[group_name]
+            else:
+                group['lr'] = self.base_learning_rate * name_to_multiplier['other']
+
+        self._active_lr_multipliers = dict(lr_multipliers)
 
     def on_epoch_start(self):
         """Update loss schedule at the start of an epoch."""
@@ -240,6 +296,15 @@ class HybridWrapper(BaseOptimizerWrapper):
             trajectory_data['observations'] = trajectory_data['observations']
         # flip the sign of the rewards
         trajectory_data['rewards'] = -trajectory_data['rewards']
+        
+        pathwise_gamma = self.ppo_params.get('pathwise_gamma', None)
+        if pathwise_gamma is not None:
+            rewards = trajectory_data['rewards']
+            T = rewards.shape[0]
+            exponents = torch.arange(1, T + 1, device=rewards.device, dtype=rewards.dtype)
+            base = torch.tensor(pathwise_gamma, device=rewards.device, dtype=rewards.dtype)
+            discounts = torch.pow(base, exponents).view(T, 1)
+            trajectory_data['rewards'] = rewards * discounts
 
         # Process and prepare trajectory data (mostly parameters that will be used in training)
         processed_data = self._prepare_trajectory_data(trajectory_data)
@@ -295,10 +360,36 @@ class HybridWrapper(BaseOptimizerWrapper):
                 mean_demand = trajectory_data['mean_demand']
                 mean_per_sample = mean_demand.mean(dim=1)  # [B]
                 processed_data['pathwise_rewards'] = processed_data['pathwise_rewards'] / mean_per_sample.view(1, -1)
+            else:
+                mean_per_sample = None
             if self.ppo_params['reward_scaling_pathwise']:
                 rewards_std = processed_data['pathwise_rewards'].std().detach()
                 if rewards_std > 0:
                     processed_data['pathwise_rewards'] = processed_data['pathwise_rewards'] / (rewards_std + 1e-8)
+            else:
+                rewards_std = None
+
+            if self.ppo_params.get('pathwise_bootstrap_value', False):
+                value_net = getattr(self.model, 'value_net', None)
+                if value_net is not None and 'observations' in trajectory_data:
+                    buffer_periods = self.ppo_params.get('buffer_periods', 0)
+                    T = trajectory_data['rewards'].shape[0]
+                    effective_T = T - 2 * buffer_periods if buffer_periods > 0 else T
+                    last_index = buffer_periods + effective_T - 1
+                    if last_index + 1 < T:
+                        next_obs = trajectory_data['observations'][last_index + 1]
+                    else:
+                        next_obs = trajectory_data.get('next_observation')
+                        if isinstance(next_obs, dict):
+                            next_obs = self.model.feature_registry.prepare_inputs(next_obs, update_ewma=False)
+                    if next_obs is not None:
+                        bootstrap_values = value_net(next_obs, process_state=False).squeeze(-1)
+                        if mean_per_sample is not None:
+                            bootstrap_values = bootstrap_values / mean_per_sample
+                        if rewards_std is not None and rewards_std > 0:
+                            bootstrap_values = bootstrap_values / (rewards_std + 1e-8)
+                        processed_data['pathwise_bootstrap_values'] = bootstrap_values
+                        processed_data['pathwise_bootstrap_discount'] = self.ppo_params.get('gamma', 0.95) ** effective_T
         
         # Get buffer size and effective trajectory length
         buffer_periods = self.ppo_params.get('buffer_periods', 0)
@@ -706,13 +797,17 @@ class HybridWrapper(BaseOptimizerWrapper):
         continuous_samples = mb_data.get('raw_continuous_samples', None)
         new_log_probs, newvalue, entropy = None, None, None
         
-        # Only call get_log_probs_value_and_entropy if we need any of its outputs
-        if required_losses['policy_gradient'] or required_losses['value'] or required_losses['entropy']:
+        # Only call get_log_probs_value_and_entropy if we need policy/entropy outputs
+        if required_losses['policy_gradient'] or required_losses['entropy']:
             new_log_probs, newvalue, entropy = self.model.get_log_probs_value_and_entropy(
-                mb_data['observations'], 
+                mb_data['observations'],
                 mb_data.get('discrete_action_indices', None),
                 continuous_samples
             )
+        elif required_losses['value']:
+            value_net = getattr(self.model, 'value_net', None)
+            if value_net is not None:
+                newvalue = value_net(mb_data['observations'], process_state=False)
         
         # Compute policy gradient loss if needed
         if required_losses['policy_gradient'] and new_log_probs is not None:
@@ -783,7 +878,13 @@ class HybridWrapper(BaseOptimizerWrapper):
         # Add pathwise loss component for continuous actions if needed
         if required_losses['pathwise'] and 'pathwise_rewards' in processed_data:
             pathwise_rewards_slice = processed_data['pathwise_rewards'][processed_data['effective_slice']]
-            pathwise_loss = - pathwise_rewards_slice.mean()
+            total_sum = pathwise_rewards_slice.sum()
+            denom = pathwise_rewards_slice.numel()
+            if processed_data.get('pathwise_bootstrap_values') is not None:
+                discount = processed_data.get('pathwise_bootstrap_discount', 1.0)
+                bootstrap_values = processed_data['pathwise_bootstrap_values']
+                total_sum = total_sum + discount * bootstrap_values.sum()
+            pathwise_loss = - total_sum / max(denom, 1)
             pathwise_loss = processed_data['pathwise_coef'] * pathwise_loss
             if normalize_by_stores:
                 pathwise_loss = pathwise_loss / self.n_stores

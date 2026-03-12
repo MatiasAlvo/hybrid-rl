@@ -61,10 +61,9 @@ optimizer_params:
     clip_by_component: true
     disable_cross_term: true
     loss_schedule:
-      warmup_policy_value_epochs: 10
+      warmup_epochs: 10
       policy_value: 3
       pathwise: 3
-      start_phase: policy_value
 
 nn_params:
   policy_network:

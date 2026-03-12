@@ -367,6 +367,14 @@ def train_sweep(sweep_config):
                         if isinstance(value_network, dict):
                             value_network['hidden_layers'] = param_value
 
+            # Override batch_size for train/dev/test in the setting config
+            if 'batch_size' in run.config:
+                params_by_dataset = setting_config.get('params_by_dataset', {})
+                for split_name in ('train', 'dev', 'test'):
+                    split_params = params_by_dataset.get(split_name)
+                    if isinstance(split_params, dict):
+                        split_params['batch_size'] = run.config['batch_size']
+
             # Scale fixed ordering cost by number of stores after overrides
             problem_params = setting_config.get('problem_params', {})
             n_stores = problem_params.get('n_stores', 1)

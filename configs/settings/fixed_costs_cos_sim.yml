@@ -36,7 +36,7 @@ sample_data_params:
 
 problem_params: 
   'setting_name': "one_store_fixed_costs"
-  'n_stores': 20
+  'n_stores': 15
   'n_warehouses': 0
   'n_extra_echelons': 0
   'lost_demand': false
@@ -110,17 +110,20 @@ echelon_params:
 
 params_by_dataset : 
   'train': 
-    'n_samples': 8192 
-    'batch_size': 128  # Values tested: 1024, 8192
+    'n_samples': 8192
+    # 'batch_size': 32768  # Values tested: 1024, 8192
+    'batch_size': 256  # Values tested: 1024, 8192
     'periods': 100 
     'ignore_periods': 16 
   'dev': 
     'n_samples': 8192 
-    'batch_size': 128 
+    # 'batch_size': 32768 
+    'batch_size': 256
     'periods': 100 
     'ignore_periods': 16 
   'test': 
     'n_samples': 8192 
-    'batch_size': 128 
+    # 'batch_size': 32768 
+    'batch_size': 256 
     'periods': 100
     'ignore_periods': 16

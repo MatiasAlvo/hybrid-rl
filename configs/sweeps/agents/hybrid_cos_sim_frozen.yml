@@ -1,0 +1,16 @@
+# Hybrid Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/hybrid_cos_sim_frozen.yml'
+
+method: 'random'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  use_wandb:
+    values:
+      - true
+  sweep_top_k_split_by:
+    values:
+      - "n_stores"
