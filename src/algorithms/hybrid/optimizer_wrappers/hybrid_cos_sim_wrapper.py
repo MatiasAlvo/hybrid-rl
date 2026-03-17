@@ -56,6 +56,7 @@ class HybridCosSimWrapper(HybridWrapper):
                 'pathwise_plus_cross_ppo': [],
                 'pathwise_plus_cross_reinforce': []
             }
+            self._shadow_alignment_batch_size = None
     
     def on_epoch_end(self):
         super().on_epoch_end()
@@ -116,6 +117,11 @@ class HybridCosSimWrapper(HybridWrapper):
             trajectory_data, processed_data
         )
 
+        if self._cosine_alignment_batch_size is None:
+            self._cosine_alignment_batch_size = processed_data.get('B')
+        if self._shadow_alignment_batch_size is None:
+            self._shadow_alignment_batch_size = processed_data.get('B')
+
         # Populate base HybridWrapper cosine metrics with detached continuous log-probs
         self._analyze_cosine_gradients(
             mb_data,
@@ -133,19 +139,23 @@ class HybridCosSimWrapper(HybridWrapper):
         # Compute gradient vectors for each estimator
         self._collect_grad_vector(
             self._policy_loss_only(mb_data_combined, processed_data),
-            'continuous_ppo'
+            'continuous_ppo',
+            batch_size=processed_data.get('B')
         )
         self._collect_grad_vector(
             self._policy_plus_pathwise(mb_data_no_cont_logprob, processed_data),
-            'pathwise_plus_cross_ppo'
+            'pathwise_plus_cross_ppo',
+            batch_size=processed_data.get('B')
         )
         self._collect_grad_vector(
             self._reinforce_plus_pathwise(mb_data_no_cont_logprob, processed_data),
-            'pathwise_plus_cross_reinforce'
+            'pathwise_plus_cross_reinforce',
+            batch_size=processed_data.get('B')
         )
         self._collect_grad_vector(
             self._reinforce_loss_only(mb_data_combined, processed_data),
-            'continuous_reinforce'
+            'continuous_reinforce',
+            batch_size=processed_data.get('B')
         )
     
     def _compute_policy_loss(self, mb_data, processed_data, detach_obs=False, detach_continuous_log_probs=False):
@@ -383,7 +393,7 @@ class HybridCosSimWrapper(HybridWrapper):
             log_probs = log_probs.sum(dim=-1, keepdim=True)
         return log_probs
     
-    def _collect_grad_vector(self, loss, key):
+    def _collect_grad_vector(self, loss, key, batch_size=None):
         self.optimizer.zero_grad()
         if loss.requires_grad:
             loss.backward(retain_graph=True)
@@ -392,6 +402,8 @@ class HybridCosSimWrapper(HybridWrapper):
         
         if grad_vec is None:
             return
+        if batch_size is not None and self._shadow_alignment_batch_size is None:
+            self._shadow_alignment_batch_size = int(batch_size)
         self._shadow_grad_buffers[key].append(grad_vec)
         self._shadow_norm_buffers[key].append(grad_vec.norm().item())
     
@@ -504,6 +516,27 @@ class HybridCosSimWrapper(HybridWrapper):
 
         if true_continuous_ppo is not None:
             metrics['shadow/continuous/num_batches'] = len(buffers.get('continuous_ppo', []))
+
+        d_values, repeats = self._get_alignment_settings()
+        if d_values and repeats is not None and self._shadow_alignment_batch_size is not None:
+            def add_shadow_alignment(prefix, vecs):
+                if not vecs:
+                    return
+                stacked = torch.stack(vecs)
+                metrics.update(
+                    self._compute_alignment_from_stack(
+                        stacked,
+                        self._shadow_alignment_batch_size,
+                        d_values,
+                        repeats,
+                        prefix
+                    )
+                )
+
+            add_shadow_alignment('continuous/continuous_ppo', buffers.get('continuous_ppo', []))
+            add_shadow_alignment('continuous/continuous_reinforce', buffers.get('continuous_reinforce', []))
+            add_shadow_alignment('continuous/pathwise_plus_cross_ppo', buffers.get('pathwise_plus_cross_ppo', []))
+            add_shadow_alignment('continuous/pathwise_plus_cross_reinforce', buffers.get('pathwise_plus_cross_reinforce', []))
         
         return metrics
 

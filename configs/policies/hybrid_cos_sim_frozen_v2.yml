@@ -1,0 +1,136 @@
+trainer_params:
+  # epochs: 1
+  epochs: 400
+  do_dev_every_n_epochs: 1
+  print_results_every_n_epochs: 1
+  save_model: false
+  epochs_between_save: 1
+  choose_best_model_on: dev_loss
+  load_previous_model: true
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=1/run_1r6rpoke_dev_loss_reported_37.077425.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=3/run_j6289ls7_dev_loss_reported_38.453118.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=5/run_23of8nuc_dev_loss_reported_38.690519.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=7/run_6s4oaw15_dev_loss_reported_38.773288.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=10/run_bk8tnv2j_dev_loss_reported_38.819465.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=20/run_rw9obq4i_dev_loss_reported_38.964408.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=30/run_iwlh5sml_dev_loss_reported_38.996471.pt'
+  load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=50/run_qak30zq6_dev_loss_reported_39.086461.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=70/run_ntglxdyy_dev_loss_reported_42.462580.pt'
+  # load_model_path: 'models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy/n_stores=100/run_cq7adssd_dev_loss_reported_51.773843.pt'
+  # load_model_path: 'models/saved_models/2025_10_22/one_store_fixed_costs/hybrid_policy/1761149697_246.pt'
+  base_dir: models/saved_models
+  compute_metrics_on_test: false
+  sweep_top_k: 1
+  reset_param_groups: ["discrete"]
+
+logging_params:
+  use_wandb: true  # Overridden by sweep config
+  use_tensorboard: false
+  wandb_project_name: inventory_control
+  wandb_entity: alvomatias
+  exp_name: hybrid_cos_sim
+  env_name: inventory
+  setting_name: one_store_fixed_costs
+  # setting_name: one_store_multi_lead_time_lost
+  # setting_name: fixed_costs_not_at_zero
+  log_inventory_action_plot: true
+  log_inventory_value_plot: true
+  log_inventory_discrete_action0_prob_plot: true
+  normalize_plots_by_mean_demand: false
+
+agent_params:
+  agent_type: hybrid_cos_sim
+  initial_temperature: 1.0
+  min_temperature: 0.001
+  temperature_decay: 0.997
+  use_straight_through: false
+  add_gumbel_noise: false
+  fixed_std: 1.0
+
+optimizer_params:
+  learning_rate: 0.0001  # Overridden by sweep config
+  # learning_rate: 0.00001  # Overridden by sweep config
+  anneal_lr: false  # Overridden by sweep config
+  weight_decay: 0.0
+  skip_update_every_n_epochs: 2
+  lr_multipliers:
+    value: 10.0
+    backbone: 1.0
+    continuous: 0.0
+    discrete: 1.0
+    other: 1.0
+  ppo_params:
+    clip_coef: 0.16  # Overridden by sweep config
+    gamma: 0.98  # Same as
+    reinforce_gamma: 0.98
+    pathwise_gamma: 0.98
+    gae_lambda: 1.0  # Overridden by sweep config
+    normalize_advantages: false  # Overridden by sweep config
+    use_gae: false  # Overridden by sweep config
+    num_epochs: 1  # Overridden by sweep config
+    value_function_coef: 0.13  # Overridden by sweep config
+    pathwise_coef: 1.0  # Overridden by sweep config
+    reward_scaling_pathwise: true  # Overridden by sweep config
+    reward_scaling: true  # Overridden by sweep config
+    buffer_periods: 20  # Overridden by sweep config
+    max_grad_norm: 100.0  # Overridden by sweep config
+    entropy_coef: 0.0
+    clip_by_component: true
+    disable_cross_term: False
+    cosine_grad_analysis: True
+    grad_analysis: false
+    # alignment_ds: null
+    # alignment_ds: [256]
+    alignment_ds: [256, 512, 1024]
+    # alignment_repeats: null
+    alignment_repeats: 100
+    num_minibatches: 1
+    use_reinforce_loss: true
+    pathwise_bootstrap_value: true
+    loss_schedule:
+      # warmup_epochs: 0
+      warmup_epochs: 80
+      warmup_lr_multipliers:
+        value: 100.0
+        backbone: 0.0
+        continuous: 0.0
+        discrete: 0.0
+        other: 0.0
+      policy_value: 0
+      pathwise: 0
+
+nn_params:
+  policy_network:
+    name: separate_network_policy
+    # name: hybrid_policy
+    input_size: null
+    hidden_layers: [256, 256]
+    # hidden_layers: [64, 64]
+    # activation: ELU  # Overridden by sweep config (policy_activation)
+    activation: Tanh  # Overridden by sweep config (policy_activation)
+    dropout: 0.0
+    batch_norm: false
+    continuous_scale: 1.0  # Overridden by sweep config
+    continuous_shift: 3.0  # on original training: 1.0
+    # continuous_shift: 4.5  # on original training: 1.0
+    # continuous_shift: 10.0  # on original training: 1.0
+    observation_keys: ['store_inventories']
+    normalize_by_mean_demand: true
+    heads:
+      discrete:
+        enabled: true
+        size: 0
+        activation: Linear
+      continuous:
+        enabled: true
+        size: 0
+        activation: Linear
+
+  value_network:
+    enabled: true
+    input_size: 2
+    hidden_layers: [256, 256]
+    activation: Tanh  # Overridden by sweep config (value_activation)
+    dropout: 0.0
+    batch_norm: false
+    output_size: 1

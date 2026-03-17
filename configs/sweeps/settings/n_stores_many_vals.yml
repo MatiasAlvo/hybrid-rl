@@ -6,9 +6,10 @@ parameters:
   normalize_observations:
     values: [False]
   n_stores:
-    # values: [10]
+    values: [3, 10]
     # values: [1, 2, 3, 5, 7, 10, 15, 20]
-    values: [50, 70, 100, 150, 200, 300, 500]
+    # values: [1, 3, 5, 7, 10, 20, 30, 50, 70, 100]
+    # values: [50, 70, 100, 150, 200, 300, 500]
     # values: [1, 5, 10, 20, 30, 50]
     distribution: 'categorical'  # This ensures values are selected uniformly
   seed:

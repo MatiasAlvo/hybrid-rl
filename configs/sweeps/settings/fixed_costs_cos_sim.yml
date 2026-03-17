@@ -1,7 +1,4 @@
 # Fixed Costs Grid Search Sweep Configuration
-# method: grid ensures each combination is tried exactly once (no replacement)
-method: grid
-
 config_files:
   setting: 'configs/settings/fixed_costs_cos_sim.yml'
 
@@ -11,6 +8,6 @@ parameters:
   fixed_cost:
     values: [64]
   batch_size:
-    values: [256, 1024]
+    values: [128, 256]
   seed:
     values: [0, 1, 2]

@@ -279,6 +279,8 @@ def train_sweep(sweep_config):
                 'learning_rate': ('hyperparams', ['optimizer_params', 'learning_rate']),
                 'anneal_lr': ('hyperparams', ['optimizer_params', 'anneal_lr']),
                 'num_epochs': ('hyperparams', ['optimizer_params', 'ppo_params', 'num_epochs']),
+                'trainer_epochs': ('hyperparams', ['trainer_params', 'epochs']),
+                'training_epochs': ('hyperparams', ['trainer_params', 'epochs']),
                 'value_function_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'value_function_coef']),
                 'gamma': ('hyperparams', ['optimizer_params', 'ppo_params', 'gamma']),
                 'gae_lambda': ('hyperparams', ['optimizer_params', 'ppo_params', 'gae_lambda']),
@@ -321,12 +323,44 @@ def train_sweep(sweep_config):
                 'fixed_ordering_cost_threshold': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'thresholds', 1]),
                 'fixed_cost': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'values', 1]),
                 'n_stores': ('setting', ['problem_params', 'n_stores']),
+                'stores': ('setting', ['problem_params', 'n_stores']),
                 'sweep_top_k_split_by': ('hyperparams', ['trainer_params', 'sweep_top_k_split_by']),
                 'sweep_top_k_metric': ('hyperparams', ['trainer_params', 'sweep_top_k_metric']),
             }
             
+            def _resolve_pretrained_model_path(load_model_dir, n_stores, run_idx):
+                n_stores_dir = os.path.join(load_model_dir, f"n_stores={n_stores}")
+                top_k_path = os.path.join(n_stores_dir, "top_k_runs.json")
+                if not os.path.exists(top_k_path):
+                    raise FileNotFoundError(
+                        f"top_k_runs.json not found at {top_k_path}"
+                    )
+                with open(top_k_path, 'r') as f:
+                    data = json.load(f)
+                entries = data.get('entries', [])
+                if not entries:
+                    raise ValueError(f"No entries found in {top_k_path}")
+                entries = sorted(
+                    entries,
+                    key=lambda x: x.get('best_metric_value', float('inf'))
+                )
+                if run_idx < 0 or run_idx >= len(entries):
+                    raise IndexError(
+                        f"run_idx {run_idx} out of range for {top_k_path} "
+                        f"(0..{len(entries) - 1})"
+                    )
+                checkpoint_path = entries[run_idx].get('checkpoint_path')
+                if not checkpoint_path:
+                    raise ValueError(
+                        f"Missing checkpoint_path for run_idx={run_idx} "
+                        f"in {top_k_path}"
+                    )
+                return checkpoint_path
+
             # Update configs based on sweep parameters from run.config
             for param_name, param_value in run.config.items():
+                if param_name == 'stores':
+                    param_name = 'n_stores'
                 if param_name in param_mappings:
                     config_type, param_path = param_mappings[param_name]
                     target_config = hyperparams_config if config_type == 'hyperparams' else setting_config
@@ -374,6 +408,32 @@ def train_sweep(sweep_config):
                     split_params = params_by_dataset.get(split_name)
                     if isinstance(split_params, dict):
                         split_params['batch_size'] = run.config['batch_size']
+
+            # Apply pretrained model selection for fixed_costs_cos_sim_frozen sweeps
+            if (
+                config_files.get('setting') == 'configs/settings/fixed_costs_cos_sim_frozen.yml'
+                and 'load_model_dir' in run.config
+                and 'run_idx' in run.config
+            ):
+                n_stores = run.config.get(
+                    'n_stores',
+                    run.config.get(
+                        'stores',
+                        setting_config.get('problem_params', {}).get('n_stores')
+                    )
+                )
+                if n_stores is None:
+                    raise ValueError("n_stores is required to resolve pretrained model path.")
+                run_idx = int(run.config['run_idx'])
+                load_model_dir = run.config['load_model_dir']
+                resolved_path = _resolve_pretrained_model_path(
+                    load_model_dir,
+                    n_stores,
+                    run_idx
+                )
+                trainer_params = hyperparams_config.setdefault('trainer_params', {})
+                trainer_params['load_previous_model'] = True
+                trainer_params['load_model_path'] = resolved_path
 
             # Scale fixed ordering cost by number of stores after overrides
             problem_params = setting_config.get('problem_params', {})

@@ -58,6 +58,7 @@ class HybridWrapper(BaseOptimizerWrapper):
         self.entropy_coef = self.initial_entropy_coef
         self.ppo_params['entropy_coef'] = self.entropy_coef
         self.cosine_grad_analysis = self.ppo_params.get('cosine_grad_analysis', False)
+        self.grad_analysis = self.ppo_params.get('grad_analysis', False)
         self._cosine_grad_buffers = None
         self._last_cosine_metrics = {}
         
@@ -72,6 +73,7 @@ class HybridWrapper(BaseOptimizerWrapper):
             print("🔓 Enabling cross-term in policy loss")
         self._warned_num_minibatches = False
         self.skip_update = False
+        self._cosine_alignment_batch_size = None
 
         # Learning rate multipliers (optional warmup override)
         self.base_learning_rate = base_lr
@@ -615,7 +617,9 @@ class HybridWrapper(BaseOptimizerWrapper):
                 last_approx_kl = approx_kl.item()
                 
                 # Check gradient information on first pass (note that losses are already multiplied by the coefficients)
-                if epoch == 0 and start == 0:
+                if epoch == 0 and start == 0 and self.grad_analysis:
+                    if self._cosine_alignment_batch_size is None:
+                        self._cosine_alignment_batch_size = processed_data.get('B')
                     gradient_metrics = self._analyze_gradients(
                         policy_loss, 
                         value_loss, 
@@ -998,6 +1002,136 @@ class HybridWrapper(BaseOptimizerWrapper):
             metrics[f'cosine/{key}/mean'] = cosines.mean().item()
         
         metrics.update(self._compute_combined_cosine_metrics())
+        metrics.update(self._compute_alignment_metrics())
+        return metrics
+
+    def _get_alignment_settings(self):
+        d_values = self.ppo_params.get('alignment_ds')
+        repeats = self.ppo_params.get('alignment_repeats')
+        if not d_values or repeats is None:
+            return None, None
+        if isinstance(d_values, (int, float)):
+            d_values = [int(d_values)]
+        else:
+            d_values = [int(d) for d in d_values]
+        repeats = int(repeats)
+        if repeats <= 0:
+            return None, None
+        return d_values, repeats
+
+    def _compute_alignment_from_stack(self, stacked, base_batch_size, d_values, repeats, prefix):
+        metrics = {}
+        if stacked is None or stacked.shape[0] == 0:
+            return metrics
+        if base_batch_size is None or base_batch_size <= 0:
+            return metrics
+        n = stacked.shape[0]
+        for d in d_values:
+            if d <= 0 or d % base_batch_size != 0:
+                continue
+            group_size = d // base_batch_size
+            if group_size <= 0 or 2 * group_size > n:
+                continue
+            cosines = []
+            signals = []
+            noises = []
+            for _ in range(repeats):
+                perm = torch.randperm(n)
+                idx = perm[:2 * group_size]
+                idx_a = idx[:group_size]
+                idx_b = idx[group_size:]
+                g_a = stacked[idx_a].mean(dim=0)
+                g_b = stacked[idx_b].mean(dim=0)
+                denom = (g_a.norm() * g_b.norm()) + 1e-8
+                cosines.append((g_a @ g_b).div(denom).item())
+                signals.append((g_a @ g_b).item())
+                noises.append(0.5 * (g_a - g_b).pow(2).sum().item())
+            metrics[f'alignment_{d}/{prefix}'] = float(sum(cosines) / len(cosines))
+            metrics[f'signal_{d}/{prefix}'] = float(sum(signals) / len(signals))
+            metrics[f'noise_{d}/{prefix}'] = float(sum(noises) / len(noises))
+        return metrics
+
+    def _compute_cross_alignment_from_stacks(self, stacked_a, stacked_b, base_batch_size, d_values, repeats, prefix):
+        metrics = {}
+        if stacked_a is None or stacked_b is None:
+            return metrics
+        if stacked_a.shape[0] == 0 or stacked_b.shape[0] == 0:
+            return metrics
+        if base_batch_size is None or base_batch_size <= 0:
+            return metrics
+        n = min(stacked_a.shape[0], stacked_b.shape[0])
+        for d in d_values:
+            if d <= 0 or d % base_batch_size != 0:
+                continue
+            group_size = d // base_batch_size
+            if group_size <= 0 or 2 * group_size > n:
+                continue
+            cosines = []
+            signals = []
+            noises = []
+            for _ in range(repeats):
+                perm = torch.randperm(n)
+                idx = perm[:2 * group_size]
+                idx_a = idx[:group_size]
+                idx_b = idx[group_size:]
+                g_a = stacked_a[idx_a].mean(dim=0)
+                g_b = stacked_b[idx_b].mean(dim=0)
+                denom = (g_a.norm() * g_b.norm()) + 1e-8
+                cosines.append((g_a @ g_b).div(denom).item())
+                signals.append((g_a @ g_b).item())
+                noises.append(0.5 * (g_a - g_b).pow(2).sum().item())
+            metrics[f'alignment_{d}/{prefix}'] = float(sum(cosines) / len(cosines))
+            metrics[f'signal_{d}/{prefix}'] = float(sum(signals) / len(signals))
+            metrics[f'noise_{d}/{prefix}'] = float(sum(noises) / len(noises))
+        return metrics
+
+    def _compute_alignment_metrics(self):
+        d_values, repeats = self._get_alignment_settings()
+        if not d_values or repeats is None:
+            return {}
+        if self._cosine_grad_buffers is None:
+            return {}
+        base_batch_size = self._cosine_alignment_batch_size
+        if base_batch_size is None:
+            return {}
+        buffers = self._cosine_grad_buffers
+        metrics = {}
+
+        def add_same(prefix, vecs):
+            if not vecs:
+                return
+            stacked = torch.stack(vecs)
+            metrics.update(
+                self._compute_alignment_from_stack(
+                    stacked, base_batch_size, d_values, repeats, prefix
+                )
+            )
+
+        add_same('discrete/cross_ppo', buffers.get('discrete/cross_ppo', []))
+        add_same('continuous/cross_ppo', buffers.get('continuous/cross_ppo', []))
+        add_same('continuous/pathwise', buffers.get('continuous/pathwise', []))
+
+        vecs_cross = buffers.get('continuous/cross_ppo', [])
+        vecs_pathwise = buffers.get('continuous/pathwise', [])
+        if vecs_cross and vecs_pathwise:
+            n = min(len(vecs_cross), len(vecs_pathwise))
+            if n > 0:
+                stacked_cross = torch.stack(vecs_cross[:n])
+                stacked_pathwise = torch.stack(vecs_pathwise[:n])
+                combined = stacked_cross + stacked_pathwise
+                metrics.update(
+                    self._compute_alignment_from_stack(
+                        combined, base_batch_size, d_values, repeats,
+                        'continuous/pathwise_plus_cross_ppo'
+                    )
+                )
+                metrics.update(
+                    self._compute_cross_alignment_from_stacks(
+                        stacked_pathwise, combined, base_batch_size, d_values,
+                        repeats, 'continuous/pathwise_vs_pathwise_plus_cross_ppo'
+                    )
+                )
+
         return metrics
 
     def _compute_combined_cosine_metrics(self):

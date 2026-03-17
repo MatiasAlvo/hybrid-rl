@@ -1294,7 +1294,7 @@ class GaussianPPOAgent(HybridAgent):
             raw_outputs, 
             argmax=not train, 
             sample=train,
-            random_continuous=True,
+            random_continuous=train,
             observations=observation
         )
         

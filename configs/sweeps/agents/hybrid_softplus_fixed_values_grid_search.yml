@@ -1,72 +1,62 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_separate_net.yml'
+  hyperparams: 'configs/policies/hybrid.yml'
 
-method: 'random'
+method: 'grid'
 metric:
   name: 'dev/loss/best'
   goal: 'minimize'
 
 parameters:
-  add_gumbel_noise:
+  trainer_epochs:
     values:
-      - false
+      - 1
   anneal_lr:
     values:
-      - false
+      - false  # Fixed: 60% of top performers used false
   buffer_periods:
     values:
-      - 20
+      - 20  # Fixed: median of top performers
   clip_coef:
     values:
-      - 0.15
-  disable_cross_term:
-    values:
-      - true
-      - false
-  entropy_coef:
-    values:
-      - 1.0
-  anneal_entropy_coef:
-    values:
-      - true
-  min_entropy_coef:
-    values:
-      - 0.001
+      - 0.16  # Fixed: median of top performers
   fixed_cost:
     distribution: categorical
     values:
       - 64
   gae_lambda:
     values:
-      - 0.96
+      - 0.96  # Fixed: median of top performers
   gamma:
     values:
-      - 0.93
-  hidden_layers:
-    values:
-      - [256, 256]
+      - 0.93  # Fixed: median of top performers
   learning_rate:
     values:
-      - 0.002
+      - 0.001  # Fixed: median of top performers
   max_grad_norm:
     values:
-      - 5.0
+      - 5.0  # Fixed: median of top performers
   normalize_advantages:
     values:
       - true
+  normalize_by_mean_demand:
+    values:
+      - true
+  disable_cross_term:
+    values:
+      - false
   normalize_observations:
     values:
       - false
   num_epochs:
     values:
-      - 5
+      - 5  # Fixed: median of top performers
   pathwise_coef:
     values:
-      - 1.0
+      - 1.0  # Fixed: median of top performers
   policy_activation:
     values:
-      - ELU
+      - Tanh  # Fixed: 90% of top performers used Tanh
   reward_scaling:
     values:
       - true
@@ -81,19 +71,13 @@ parameters:
       - Tanh
   value_function_coef:
     values:
-      - 0.15
+      - 0.13  # Fixed: median of top performers
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
-      - 1.0
-  normalize_by_mean_demand:
-    values:
-      - true
+      - 5.0  # Fixed: median of top performers (changed from 1.0 to 1)
   use_wandb:
     values:
       - true
-  sweep_top_k_split_by:
-    values:
-      - "n_stores"

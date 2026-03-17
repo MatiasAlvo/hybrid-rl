@@ -1,5 +1,5 @@
 trainer_params:
-  epochs: 500
+  epochs: 300
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
