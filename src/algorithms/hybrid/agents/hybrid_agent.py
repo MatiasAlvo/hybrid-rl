@@ -468,39 +468,44 @@ class FixedDiscreteHybridAgent(HybridAgent):
                 and [..., 1, :] = order quantities to reach base_stock_levels
         """
         # Extract inventories; handle optional lead-time dimension
-        states = observation['store_inventories'].squeeze(-1)
-        if states.dim() == 3:
-            # Use on-hand inventory (lead_time index 0) for ordering decisions
-            states = states[..., 0]  # [batch, n_stores]
+        states = observation['store_inventories'].sum(dim=-1)
         
         batch_size = states.shape[0]
         n_items = states.shape[1]
         
         # Convert base_stock_levels to tensor if needed
         if not isinstance(base_stock_levels, torch.Tensor):
-            base_stock_levels = torch.tensor(base_stock_levels, 
-                                            dtype=states.dtype, 
-                                            device=states.device)
+            base_stock_levels = torch.tensor(
+                base_stock_levels,
+                dtype=states.dtype,
+                device=states.device
+            )
         
-        # Ensure base_stock_levels has the right shape [n_items]
-        base_stock_levels = base_stock_levels.view(n_items)
+        # Allow either per-item [n_items] or per-sample [batch, n_items]
+        if base_stock_levels.dim() == 1:
+            base_stock_levels = base_stock_levels.view(1, n_items).expand(batch_size, -1)
+        elif base_stock_levels.dim() == 2:
+            if base_stock_levels.shape[0] != batch_size or base_stock_levels.shape[1] != n_items:
+                raise ValueError(
+                    f"base_stock_levels has shape {tuple(base_stock_levels.shape)}, "
+                    f"expected ({batch_size}, {n_items})."
+                )
+        else:
+            raise ValueError(
+                f"base_stock_levels must have shape [n_items] or [batch, n_items], "
+                f"got {tuple(base_stock_levels.shape)}."
+            )
         
         # Compute order quantities: max(0, S - x) for each item
-        # Broadcasting: [batch, n_items] - [n_items] -> [batch, n_items]
         order_quantities = torch.clamp(base_stock_levels - states, min=0)  # [batch, n_items]
         
-        # Create continuous_values tensor [batch, 2, n_items]
-        continuous_values = torch.zeros(batch_size, 2, n_items,
-                                    dtype=states.dtype,
-                                    device=states.device)
-        
-        # Set the order action values (index 1)
-        continuous_values[:, 1, :] = order_quantities
-        
-        # Index 0 remains all zeros (no-order action has no continuous component)
+        # Build continuous values without in-place assignment to preserve gradients
+        zeros = torch.zeros_like(order_quantities)
+        # Shape: [batch, n_items, 2] where index 0 = no-order, index 1 = order qty
+        continuous_values = torch.stack([zeros, order_quantities], dim=-1)
         
         continuous_output = {
-            'continuous_values': continuous_values.transpose(1, 2)  # Swap second and third dims: [batch, n_items, 2]
+            'continuous_values': continuous_values
         }
         
         return continuous_output
@@ -622,14 +627,36 @@ class TrainableBaseStockHybridAgent(FixedContinuousHybridAgent):
 
     def __init__(self, config, feature_registry=None, device='cpu'):
         super().__init__(config, feature_registry, device)
-        initial_level = float(self.fixed_base_stock_level)
-        # Train a single shared base-stock level (kept non-negative via softplus).
-        self.base_stock_level = nn.Parameter(
-            torch.tensor(initial_level, dtype=torch.float32, device=self.device)
-        )
+        agent_params = config.get('agent_params', {})
+        self.base_stock_shared = agent_params.get('base_stock_shared', True)
+        n_items = self.feature_registry.n_stores if self.feature_registry is not None else 1
 
+        if self.base_stock_shared:
+            initial_level = float(self.fixed_base_stock_level)
+            # Train a single shared base-stock level (kept non-negative via softplus).
+            self.base_stock_level = nn.Parameter(
+                torch.tensor(initial_level, dtype=torch.float32, device=self.device)
+            )
+        else:
+            initial_levels = agent_params.get('base_stock_levels', None)
+            if initial_levels is None:
+                initial_levels = [float(self.fixed_base_stock_level)] * n_items
+            # Train per-store base-stock levels (kept non-negative via softplus).
+            self.base_stock_levels = nn.Parameter(
+                torch.tensor(initial_levels, dtype=torch.float32, device=self.device)
+            )
+
+    def _get_required_losses(self):
+        """Train discrete PPO and pathwise continuous losses."""
+        return {
+            'policy_gradient': True,   # For discrete actions
+            'value': True,             # For PPO advantage estimation
+            'pathwise': True,          # For continuous actions
+            'entropy': True            # For exploration
+        }
+    
     def forward(self, observation, train=True):
-        """Forward pass with a learned shared base-stock level."""
+        """Forward pass with learned shared or per-store base-stock levels."""
         # Prepare inputs using feature registry (normalizes and flattens)
         processed_obs = self.feature_registry.prepare_inputs(observation)
         
@@ -644,10 +671,27 @@ class TrainableBaseStockHybridAgent(FixedContinuousHybridAgent):
             straight_through=False
         )
         
-        # Process continuous outputs using learned shared base-stock level
-        n_items = observation['store_inventories'].shape[1]
-        base_stock_level = F.softplus(self.base_stock_level)
-        base_stock_levels = base_stock_level.expand(n_items)
+        # Process continuous outputs using policy output as base-stock level(s)
+        continuous_raw = raw_outputs.get('continuous')
+        if continuous_raw is None:
+            raise ValueError("Missing continuous outputs for base-stock policy.")
+
+        # Reshape to [batch, n_stores, n_sub_ranges] when needed
+        continuous_reshaped = self.feature_registry.reshape_continuous_output(continuous_raw)
+        if continuous_reshaped is None:
+            raise ValueError("Could not reshape continuous outputs for base-stock policy.")
+
+        # Interpret the last sub-range as base-stock level per store
+        if continuous_reshaped.dim() == 3:
+            base_stock_levels = continuous_reshaped[..., -1]
+        elif continuous_reshaped.dim() == 2:
+            base_stock_levels = continuous_reshaped
+        else:
+            raise ValueError(
+                f"Unexpected continuous output shape for base-stock policy: "
+                f"{tuple(continuous_reshaped.shape)}"
+            )
+        base_stock_levels = F.softplus(base_stock_levels)
         continuous_output = self.base_stock_continuous_ordering_policy(
             observation,
             base_stock_levels
@@ -677,6 +721,19 @@ class TrainableBaseStockHybridAgent(FixedContinuousHybridAgent):
             'raw_outputs': raw_outputs,
             'vectorized_observation': processed_obs
         }
+
+    def parameters(self):
+        """Include trainable base-stock parameters in optimization."""
+        params = super().parameters()
+        if isinstance(params, list):
+            param_list = params
+        else:
+            param_list = list(params)
+        if self.base_stock_shared:
+            param_list.append(self.base_stock_level)
+        else:
+            param_list.append(self.base_stock_levels)
+        return param_list
 
 class OptimalMultiItem(FixedDiscreteHybridAgent):
 

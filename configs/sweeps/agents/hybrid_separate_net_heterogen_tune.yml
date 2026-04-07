@@ -1,8 +1,8 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_separate_net.yml'
+  hyperparams: 'configs/policies/hybrid_separate_net_heterogen.yml'
 
-method: 'grid'
+method: 'random'
 metric:
   name: 'dev/loss/best'
   goal: 'minimize'
@@ -13,59 +13,74 @@ parameters:
       - false
   anneal_lr:
     values:
+      - true
       - false
   buffer_periods:
     values:
       - 20
+      - 10
   clip_coef:
-    values:
-      - 0.15
+    distribution: uniform
+    max: 0.2
+    min: 0.1
   disable_cross_term:
     values:
       - true
+      - false
   entropy_coef:
-    values:
-      - 0.5
+    distribution: log_uniform_values
+    max: 5.0
+    min: 0.1
   anneal_entropy_coef:
     values:
       - true
   min_entropy_coef:
     values:
-      - 0.001
+      - 0.0
   fixed_cost:
     distribution: categorical
     values:
       - 64
   gae_lambda:
-    values:
-      - 0.96
+    distribution: uniform
+    max: 0.97
+    min: 0.95
   gamma:
-    values:
-      - 0.93
+    distribution: uniform
+    max: 0.95
+    min: 0.92
   hidden_layers:
     values:
+      - [256, 256]
       - [512, 512]
   learning_rate:
-    values:
-      - 0.001
+    distribution: log_uniform_values
+    max: 0.01
+    min: 0.0001
   max_grad_norm:
-    values:
-      - 5.0
+    distribution: uniform
+    max: 10
+    min: 1
   normalize_advantages:
     values:
       - true
+      - false
   normalize_observations:
     values:
       - false
   num_epochs:
     values:
       - 5
+      - 3
+      - 1
   pathwise_coef:
-    values:
-      - 5.0
+    distribution: log_uniform_values
+    max: 100
+    min: 0.1
   policy_activation:
     values:
-    - Tanh
+      - Tanh
+      - ELU
   reward_scaling:
     values:
       - true
@@ -79,20 +94,20 @@ parameters:
     values: 
       - Tanh
   value_function_coef:
-    values:
-      - 0.15
+    distribution: log_uniform_values
+    max: 0.2
+    min: 0.1
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
       - 1.0
+      - 5.0
   normalize_by_mean_demand:
     values:
       - true
+      - false
   use_wandb:
     values:
-      - true
-  sweep_top_k_split_by:
-    values:
-      - "n_stores"
+      - true 

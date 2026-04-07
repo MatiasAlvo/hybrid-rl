@@ -424,242 +424,114 @@ class HybridCosSimWrapper(HybridWrapper):
         buffers = self._shadow_grad_buffers
         if not buffers:
             return metrics
-        
-        def add_cosine_metrics(prefix, vecs):
-            if not vecs:
-                return None
-            stacked = torch.stack(vecs)
-            true_vec = stacked.mean(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            norms = stacked.norm(dim=1) + 1e-8
-            cosines = (stacked @ true_vec) / (norms * true_norm)
-            per_dim_var = stacked.var(dim=0, unbiased=False)
-            total_var = per_dim_var.sum().item()
-            metrics[f'cosine/continuous/{prefix}/mean'] = cosines.mean().item()
-            metrics[f'grad_norm/continuous/{prefix}/mean'] = norms.mean().item()
-            metrics[f'grad_norm/continuous/{prefix}/var'] = total_var
-            metrics[f'grad_norm/continuous/{prefix}/true'] = true_norm.item()
-            return true_vec
-        
-        true_continuous_ppo = add_cosine_metrics(
-            'continuous_ppo',
-            buffers.get('continuous_ppo', [])
-        )
-        add_cosine_metrics(
-            'continuous_reinforce',
-            buffers.get('continuous_reinforce', [])
-        )
-        add_cosine_metrics(
-            'pathwise_plus_cross_ppo',
-            buffers.get('pathwise_plus_cross_ppo', [])
-        )
-        add_cosine_metrics(
-            'pathwise_plus_cross_reinforce',
-            buffers.get('pathwise_plus_cross_reinforce', [])
-        )
-        
-        # Continuous PPO vs true pathwise+cross PPO (same batches, same actions)
-        vecs_continuous_ppo = buffers.get('continuous_ppo', [])
-        true_pathwise_plus_cross_ppo = None
-        if buffers.get('pathwise_plus_cross_ppo'):
-            true_pathwise_plus_cross_ppo = torch.stack(
-                buffers.get('pathwise_plus_cross_ppo')
-            ).mean(dim=0)
-        if true_pathwise_plus_cross_ppo is not None and vecs_continuous_ppo:
-            stacked = torch.stack(vecs_continuous_ppo)
-            true_norm = true_pathwise_plus_cross_ppo.norm() + 1e-8
-            norms = stacked.norm(dim=1) + 1e-8
-            cosines = (stacked @ true_pathwise_plus_cross_ppo) / (norms * true_norm)
-            metrics['cosine/continuous/continuous_ppo_vs_true_pathwise_plus_cross_ppo/mean'] = cosines.mean().item()
-        
-        # Continuous REINFORCE vs true pathwise+cross PPO (same batches, same actions)
-        vecs_continuous_reinforce = buffers.get('continuous_reinforce', [])
-        if true_pathwise_plus_cross_ppo is not None and vecs_continuous_reinforce:
-            stacked = torch.stack(vecs_continuous_reinforce)
-            true_norm = true_pathwise_plus_cross_ppo.norm() + 1e-8
-            norms = stacked.norm(dim=1) + 1e-8
-            cosines = (stacked @ true_pathwise_plus_cross_ppo) / (norms * true_norm)
-            metrics['cosine/continuous/continuous_reinforce_vs_true_pathwise_plus_cross_ppo/mean'] = cosines.mean().item()
-
-        true_pathwise_plus_cross_reinforce = None
-        if buffers.get('pathwise_plus_cross_reinforce'):
-            true_pathwise_plus_cross_reinforce = torch.stack(
-                buffers.get('pathwise_plus_cross_reinforce')
-            ).mean(dim=0)
-        if true_pathwise_plus_cross_reinforce is not None and vecs_continuous_reinforce:
-            stacked = torch.stack(vecs_continuous_reinforce)
-            true_norm = true_pathwise_plus_cross_reinforce.norm() + 1e-8
-            norms = stacked.norm(dim=1) + 1e-8
-            cosines = (stacked @ true_pathwise_plus_cross_reinforce) / (norms * true_norm)
-            metrics['cosine/continuous/continuous_reinforce_vs_true_pathwise_plus_cross_reinforce/mean'] = cosines.mean().item()
-
-        if true_continuous_ppo is not None and true_pathwise_plus_cross_ppo is not None:
-            true_continuous_ppo_norm = true_continuous_ppo.norm() + 1e-8
-            true_pathwise_plus_cross_ppo_norm = true_pathwise_plus_cross_ppo.norm() + 1e-8
-            true_cosine = (
-                (true_continuous_ppo @ true_pathwise_plus_cross_ppo)
-                / (true_continuous_ppo_norm * true_pathwise_plus_cross_ppo_norm)
-            )
-            metrics['cosine/continuous/true_continuous_ppo_vs_true_pathwise_plus_cross_ppo'] = true_cosine.item()
-
-        true_continuous_reinforce = None
-        if vecs_continuous_reinforce:
-            true_continuous_reinforce = torch.stack(vecs_continuous_reinforce).mean(dim=0)
-        if true_continuous_reinforce is not None and true_pathwise_plus_cross_reinforce is not None:
-            true_continuous_reinforce_norm = true_continuous_reinforce.norm() + 1e-8
-            true_pathwise_plus_cross_reinforce_norm = true_pathwise_plus_cross_reinforce.norm() + 1e-8
-            true_cosine = (
-                (true_continuous_reinforce @ true_pathwise_plus_cross_reinforce)
-                / (true_continuous_reinforce_norm * true_pathwise_plus_cross_reinforce_norm)
-            )
-            metrics['cosine/continuous/true_continuous_reinforce_vs_true_pathwise_plus_cross_reinforce'] = true_cosine.item()
-
-        if true_continuous_ppo is not None:
-            metrics['shadow/continuous/num_batches'] = len(buffers.get('continuous_ppo', []))
 
         d_values, repeats = self._get_alignment_settings()
-        if d_values and repeats is not None and self._shadow_alignment_batch_size is not None:
-            def add_shadow_alignment(prefix, vecs):
-                if not vecs:
-                    return
-                stacked = torch.stack(vecs)
-                metrics.update(
-                    self._compute_alignment_from_stack(
-                        stacked,
-                        self._shadow_alignment_batch_size,
-                        d_values,
-                        repeats,
-                        prefix
-                    )
-                )
-
-            add_shadow_alignment('continuous/continuous_ppo', buffers.get('continuous_ppo', []))
-            add_shadow_alignment('continuous/continuous_reinforce', buffers.get('continuous_reinforce', []))
-            add_shadow_alignment('continuous/pathwise_plus_cross_ppo', buffers.get('pathwise_plus_cross_ppo', []))
-            add_shadow_alignment('continuous/pathwise_plus_cross_reinforce', buffers.get('pathwise_plus_cross_reinforce', []))
-        
-        return metrics
-
-    def _compute_combined_cosine_metrics(self):
-        metrics = {}
-        if self._cosine_grad_buffers is None:
+        if not d_values or repeats is None or self._shadow_alignment_batch_size is None:
             return metrics
+
+        def add_cosine_metrics(prefix, vecs):
+            if not vecs:
+                return
+            stacked = torch.stack(vecs)
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    stacked,
+                    stacked,
+                    self._shadow_alignment_batch_size,
+                    d_values,
+                    repeats,
+                    f'continuous/{prefix}'
+                )
+            )
+
+        add_cosine_metrics('continuous_ppo', buffers.get('continuous_ppo', []))
+        add_cosine_metrics('continuous_reinforce', buffers.get('continuous_reinforce', []))
+        add_cosine_metrics('pathwise_plus_cross_ppo', buffers.get('pathwise_plus_cross_ppo', []))
+        add_cosine_metrics('pathwise_plus_cross_reinforce', buffers.get('pathwise_plus_cross_reinforce', []))
+
+        vecs_continuous_ppo = buffers.get('continuous_ppo', [])
+        if vecs_continuous_ppo:
+            stacked = torch.stack(vecs_continuous_ppo)
+            metrics.update(
+                self._compute_alignment_from_stack(
+                    stacked,
+                    self._shadow_alignment_batch_size,
+                    d_values,
+                    repeats,
+                    'continuous/continuous_ppo'
+                )
+            )
+
+        vecs_continuous_reinforce = buffers.get('continuous_reinforce', [])
+        vecs_pathwise_plus_cross_ppo = buffers.get('pathwise_plus_cross_ppo', [])
+        vecs_pathwise_plus_cross_reinforce = buffers.get('pathwise_plus_cross_reinforce', [])
+
+        if vecs_continuous_ppo and vecs_pathwise_plus_cross_ppo:
+            n = min(len(vecs_continuous_ppo), len(vecs_pathwise_plus_cross_ppo))
+            query_stack = torch.stack(vecs_continuous_ppo[:n])
+            true_stack = torch.stack(vecs_pathwise_plus_cross_ppo[:n])
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    query_stack,
+                    true_stack,
+                    self._shadow_alignment_batch_size,
+                    d_values,
+                    repeats,
+                    'continuous/continuous_ppo_vs_true_pathwise_plus_cross_ppo'
+                )
+            )
+
+        if vecs_continuous_reinforce and vecs_pathwise_plus_cross_ppo:
+            n = min(len(vecs_continuous_reinforce), len(vecs_pathwise_plus_cross_ppo))
+            query_stack = torch.stack(vecs_continuous_reinforce[:n])
+            true_stack = torch.stack(vecs_pathwise_plus_cross_ppo[:n])
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    query_stack,
+                    true_stack,
+                    self._shadow_alignment_batch_size,
+                    d_values,
+                    repeats,
+                    'continuous/continuous_reinforce_vs_true_pathwise_plus_cross_ppo'
+                )
+            )
+
+        if vecs_continuous_reinforce and vecs_pathwise_plus_cross_reinforce:
+            n = min(len(vecs_continuous_reinforce), len(vecs_pathwise_plus_cross_reinforce))
+            query_stack = torch.stack(vecs_continuous_reinforce[:n])
+            true_stack = torch.stack(vecs_pathwise_plus_cross_reinforce[:n])
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    query_stack,
+                    true_stack,
+                    self._shadow_alignment_batch_size,
+                    d_values,
+                    repeats,
+                    'continuous/continuous_reinforce_vs_true_pathwise_plus_cross_reinforce'
+                )
+            )
         
-        def add_combined(prefix, key_a, key_b):
-            vecs_a = self._cosine_grad_buffers.get(key_a)
-            vecs_b = self._cosine_grad_buffers.get(key_b)
-            if not vecs_a or not vecs_b:
-                return
-            n = min(len(vecs_a), len(vecs_b))
-            combined = [vecs_a[i] + vecs_b[i] for i in range(n)]
-            stacked = torch.stack(combined)
-            true_vec = stacked.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            vec_norms = stacked.norm(dim=1) + 1e-8
-            cosines = (stacked @ true_vec) / (vec_norms * true_norm)
-            per_dim_var = stacked.var(dim=0, unbiased=False)
-            total_var = per_dim_var.sum().item()
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
-            metrics[f'grad_norm/{prefix}/var'] = total_var
-            metrics[f'grad_norm/{prefix}/true'] = true_norm.item()
+        # --- Restore True vs True Comparisons ---
+        if vecs_continuous_ppo and vecs_pathwise_plus_cross_ppo:
+            true_ppo = torch.stack(vecs_continuous_ppo).sum(dim=0)
+            true_hybrid = torch.stack(vecs_pathwise_plus_cross_ppo).sum(dim=0)
+            
+            true_ppo_norm = true_ppo.norm() + 1e-8
+            true_hybrid_norm = true_hybrid.norm() + 1e-8
+            true_cosine = (true_ppo @ true_hybrid) / (true_ppo_norm * true_hybrid_norm)
+            metrics['cosine/continuous/true_continuous_ppo_vs_true_pathwise_plus_cross_ppo'] = true_cosine.item()
 
-        def add_against_combined_true(prefix, key_query, key_a, key_b):
-            vecs_query = self._cosine_grad_buffers.get(key_query)
-            vecs_a = self._cosine_grad_buffers.get(key_a)
-            vecs_b = self._cosine_grad_buffers.get(key_b)
-            if not vecs_query or not vecs_a or not vecs_b:
-                return
-            n = min(len(vecs_query), len(vecs_a), len(vecs_b))
-            if n == 0:
-                return
-            combined = [vecs_a[i] + vecs_b[i] for i in range(n)]
-            combined_stack = torch.stack(combined)
-            true_vec = combined_stack.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            query_stack = torch.stack(vecs_query[:n])
-            query_norms = query_stack.norm(dim=1) + 1e-8
-            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
-
-        def add_combined_vs_combined_true(prefix, key_q_a, key_q_b, key_t_a, key_t_b):
-            vecs_q_a = self._cosine_grad_buffers.get(key_q_a)
-            vecs_q_b = self._cosine_grad_buffers.get(key_q_b)
-            vecs_t_a = self._cosine_grad_buffers.get(key_t_a)
-            vecs_t_b = self._cosine_grad_buffers.get(key_t_b)
-            if not vecs_q_a or not vecs_q_b or not vecs_t_a or not vecs_t_b:
-                return
-            n = min(len(vecs_q_a), len(vecs_q_b), len(vecs_t_a), len(vecs_t_b))
-            if n == 0:
-                return
-            query_combined = [vecs_q_a[i] + vecs_q_b[i] for i in range(n)]
-            true_combined = [vecs_t_a[i] + vecs_t_b[i] for i in range(n)]
-            query_stack = torch.stack(query_combined)
-            true_stack = torch.stack(true_combined)
-            true_vec = true_stack.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            query_norms = query_stack.norm(dim=1) + 1e-8
-            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
-
-        def add_against_true(prefix, key_query, key_true):
-            vecs_query = self._cosine_grad_buffers.get(key_query)
-            vecs_true = self._cosine_grad_buffers.get(key_true)
-            if not vecs_query or not vecs_true:
-                return
-            if vecs_query[0].shape != vecs_true[0].shape:
-                return
-            true_stack = torch.stack(vecs_true)
-            true_vec = true_stack.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            query_stack = torch.stack(vecs_query)
-            query_norms = query_stack.norm(dim=1) + 1e-8
-            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
-            per_dim_var = query_stack.var(dim=0, unbiased=False)
-            total_var = per_dim_var.sum().item()
-            metrics[f'grad_norm/{prefix}/var'] = total_var
-            metrics[f'grad_norm/{prefix}/true'] = true_norm.item()
+        if vecs_continuous_reinforce and vecs_pathwise_plus_cross_reinforce:
+            true_reinforce = torch.stack(vecs_continuous_reinforce).sum(dim=0)
+            true_hybrid_reinforce = torch.stack(vecs_pathwise_plus_cross_reinforce).sum(dim=0)
+            
+            true_reinf_norm = true_reinforce.norm() + 1e-8
+            true_hyb_reinf_norm = true_hybrid_reinforce.norm() + 1e-8
+            true_cosine = (true_reinforce @ true_hybrid_reinforce) / (true_reinf_norm * true_hyb_reinf_norm)
+            metrics['cosine/continuous/true_continuous_reinforce_vs_true_pathwise_plus_cross_reinforce'] = true_cosine.item()
         
-        add_against_true(
-            'discrete/cross_ppo_vs_cross_reinforce_true',
-            'discrete/cross_ppo',
-            'discrete/cross_reinforce'
-        )
-        add_against_true(
-            'continuous/cross_ppo_vs_cross_reinforce_true',
-            'continuous/cross_ppo',
-            'continuous/cross_reinforce'
-        )
-        add_against_combined_true(
-            'continuous/pathwise_vs_pathwise_plus_cross_reinforce',
-            'continuous/pathwise',
-            'continuous/cross_reinforce',
-            'continuous/pathwise'
-        )
-        add_against_combined_true(
-            'continuous/pathwise_vs_pathwise_plus_cross_ppo',
-            'continuous/pathwise',
-            'continuous/cross_ppo',
-            'continuous/pathwise'
-        )
-        add_against_true(
-            'continuous/cross_ppo',
-            'continuous/cross_ppo',
-            'continuous/cross_ppo'
-        )
-        add_against_true(
-            'discrete/cross_ppo',
-            'discrete/cross_ppo',
-            'discrete/cross_ppo'
-        )
-        add_against_true(
-            'continuous/pathwise',
-            'continuous/pathwise',
-            'continuous/pathwise'
-        )
-        add_combined(
-            'continuous/pathwise_plus_cross_ppo',
-            'continuous/cross_ppo',
-            'continuous/pathwise'
-        )
+        if vecs_continuous_ppo:
+            metrics['shadow/continuous/num_batches'] = len(vecs_continuous_ppo)
+        
         return metrics
+

@@ -1,5 +1,5 @@
 trainer_params:
-  epochs: 250
+  epochs: 50
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
@@ -26,6 +26,10 @@ logging_params:
 agent_params:
   agent_type: trainable_base_stock_hybrid
   fixed_base_stock_level: 62
+  base_stock_shared: false
+  # Optional: per-store initialization (length = n_stores). If omitted,
+  # defaults to fixed_base_stock_level for all stores.
+  # base_stock_levels: [62, 62]
   initial_temperature: 1.0
   min_temperature: 0.001
   temperature_decay: 0.997
@@ -33,7 +37,7 @@ agent_params:
   add_gumbel_noise: false
 
 optimizer_params:
-  learning_rate: 0.003
+  learning_rate: 0.03
   anneal_lr: false
   weight_decay: 0.0
   lr_multipliers:
@@ -57,10 +61,11 @@ optimizer_params:
     max_grad_norm: 5.0
     entropy_coef: 0.0
     clip_by_component: true
+    grad_analysis: true
 
 nn_params:
   policy_network:
-    name: hybrid_policy
+    name: separate_network_policy_fixed_continuous_input
     input_size: null
     hidden_layers: [64, 64]
     activation: Tanh
@@ -68,7 +73,7 @@ nn_params:
     batch_norm: false
     continuous_scale: 1.0
     continuous_shift: 5.0
-    observation_keys: ['store_inventories']
+    observation_keys: ['store_inventories', 'underage_costs', 'holding_costs', 'mean']
     normalize_by_mean_demand: False
     heads:
       discrete:

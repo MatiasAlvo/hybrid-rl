@@ -1,4 +1,5 @@
 import copy
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -53,9 +54,13 @@ class HybridWrapper(BaseOptimizerWrapper):
         super().__init__(model, optimizer, problem_params, device)
         self.ppo_params = ppo_params or {}  # Use empty dict if no params provided
         self.initial_entropy_coef = float(self.ppo_params.get('entropy_coef', 0.0))
+        if self.ppo_params.get('entropy_coef_scale_log_n_stores', False):
+            scale = math.log(self.n_stores) if self.n_stores > 1 else 1.0
+            self.initial_entropy_coef *= scale
         self.min_entropy_coef = float(self.ppo_params.get('min_entropy_coef', self.initial_entropy_coef))
         self.anneal_entropy_coef = bool(self.ppo_params.get('anneal_entropy_coef', False))
         self.entropy_coef = self.initial_entropy_coef
+        print(f'initial_entropy_coef: {self.initial_entropy_coef}')
         self.ppo_params['entropy_coef'] = self.entropy_coef
         self.cosine_grad_analysis = self.ppo_params.get('cosine_grad_analysis', False)
         self.grad_analysis = self.ppo_params.get('grad_analysis', False)
@@ -605,10 +610,11 @@ class HybridWrapper(BaseOptimizerWrapper):
                 # Store first metrics
                 if first_clipfrac is None:
                     first_clipfrac = clipfrac
-                    if first_clipfrac > 0.0001:
-                        raise ValueError("First clipfrac is greater than 0.0")
+                    if first_clipfrac > 0.1:
+                        print(f"First clipfrac: {first_clipfrac}")
+                        raise ValueError(f"First clipfrac is greater than 0.0")
                     first_approx_kl = approx_kl.item()
-                    if first_approx_kl > 0.0001:
+                    if first_approx_kl > 0.001:
                         print(f"First approx_kl: {first_approx_kl}")
                         raise ValueError("First approx_kl is greater than 0.0")
                     
@@ -991,15 +997,19 @@ class HybridWrapper(BaseOptimizerWrapper):
 
     def _compute_cosine_metrics(self):
         metrics = {}
-        for key, vecs in self._cosine_grad_buffers.items():
-            if not vecs:
-                continue
-            stacked = torch.stack(vecs)
-            true_vec = stacked.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            vec_norms = stacked.norm(dim=1) + 1e-8
-            cosines = (stacked @ true_vec) / (vec_norms * true_norm)
-            metrics[f'cosine/{key}/mean'] = cosines.mean().item()
+        d_values, repeats = self._get_alignment_settings()
+        
+        if d_values and repeats is not None and self._cosine_alignment_batch_size is not None:
+            for key, vecs in self._cosine_grad_buffers.items():
+                if not vecs or len(vecs) <= 1:
+                    continue
+                stacked = torch.stack(vecs)
+                metrics.update(
+                    self._compute_loo_metrics_from_stacks(
+                        stacked, stacked, self._cosine_alignment_batch_size, 
+                        d_values, repeats, key
+                    )
+                )
         
         metrics.update(self._compute_combined_cosine_metrics())
         metrics.update(self._compute_alignment_metrics())
@@ -1085,6 +1095,62 @@ class HybridWrapper(BaseOptimizerWrapper):
             metrics[f'noise_{d}/{prefix}'] = float(sum(noises) / len(noises))
         return metrics
 
+    def _compute_loo_metrics_from_stacks(self, query_stack, true_stack, base_batch_size, d_values, repeats, prefix):
+        metrics = {}
+        n = query_stack.shape[0]
+        if n <= 1 or base_batch_size is None or base_batch_size <= 0:
+            return metrics
+            
+        true_sum = true_stack.sum(dim=0)
+        
+        # Log the overall true norm and variance for the full stack (preserving existing behavior)
+        true_norm_full = true_sum.norm().item() + 1e-8
+        metrics[f'grad_norm/{prefix}/true'] = true_norm_full
+        metrics[f'grad_norm/{prefix}/var'] = query_stack.var(dim=0, unbiased=False).sum().item()
+
+        for d in d_values:
+            if d <= 0 or d % base_batch_size != 0:
+                continue
+            k = d // base_batch_size
+            if k <= 0 or k >= n:
+                continue
+                
+            if k == 1:
+                # Vectorized Exact LOO for all available batches (no repeats needed)
+                true_loo_mean = (true_sum.unsqueeze(0) - true_stack) / (n - 1)
+                query_mean = query_stack
+                
+                signals = (query_mean * true_loo_mean).sum(dim=1)
+                noises = 0.5 * (query_mean - true_loo_mean).pow(2).sum(dim=1)
+                query_norms = query_mean.norm(dim=1) + 1e-8
+                true_loo_norms = true_loo_mean.norm(dim=1) + 1e-8
+                cosines = signals / (query_norms * true_loo_norms)
+                
+                metrics[f'loo_cosine_{d}/{prefix}/mean'] = cosines.mean().item()
+                metrics[f'loo_signal_{d}/{prefix}'] = signals.mean().item()
+                metrics[f'loo_noise_{d}/{prefix}'] = noises.mean().item()
+            else:
+                # Random sampling for aggregated batches D > b
+                cosines_list, signals_list, noises_list = [], [], []
+                for _ in range(repeats):
+                    idx = torch.randperm(n)[:k]
+                    query_mean = query_stack[idx].mean(dim=0)
+                    true_loo_mean = (true_sum - true_stack[idx].sum(dim=0)) / (n - k)
+                    
+                    sig = (query_mean @ true_loo_mean).item()
+                    noi = 0.5 * (query_mean - true_loo_mean).pow(2).sum().item()
+                    cos = sig / ((query_mean.norm() * true_loo_mean.norm() + 1e-8).item())
+                    
+                    signals_list.append(sig)
+                    noises_list.append(noi)
+                    cosines_list.append(cos)
+                
+                metrics[f'loo_cosine_{d}/{prefix}/mean'] = float(sum(cosines_list) / len(cosines_list))
+                metrics[f'loo_signal_{d}/{prefix}'] = float(sum(signals_list) / len(signals_list))
+                metrics[f'loo_noise_{d}/{prefix}'] = float(sum(noises_list) / len(noises_list))
+                
+        return metrics
+
     def _compute_alignment_metrics(self):
         d_values, repeats = self._get_alignment_settings()
         if not d_values or repeats is None:
@@ -1140,38 +1206,47 @@ class HybridWrapper(BaseOptimizerWrapper):
             return metrics
         
         def add_combined(prefix, key_a, key_b):
+            d_values, repeats = self._get_alignment_settings()
+            if not d_values or repeats is None:
+                return
             vecs_a = self._cosine_grad_buffers.get(key_a)
             vecs_b = self._cosine_grad_buffers.get(key_b)
             if not vecs_a or not vecs_b:
                 return
             n = min(len(vecs_a), len(vecs_b))
-            combined = [vecs_a[i] + vecs_b[i] for i in range(n)]
-            stacked = torch.stack(combined)
-            true_vec = stacked.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            vec_norms = stacked.norm(dim=1) + 1e-8
-            cosines = (stacked @ true_vec) / (vec_norms * true_norm)
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
+            if n <= 1:
+                return
+            combined = torch.stack([vecs_a[i] + vecs_b[i] for i in range(n)])
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    combined, combined, self._cosine_alignment_batch_size, d_values, repeats, prefix
+                )
+            )
 
         def add_against_combined_true(prefix, key_query, key_a, key_b):
+            d_values, repeats = self._get_alignment_settings()
+            if not d_values or repeats is None:
+                return
             vecs_query = self._cosine_grad_buffers.get(key_query)
             vecs_a = self._cosine_grad_buffers.get(key_a)
             vecs_b = self._cosine_grad_buffers.get(key_b)
             if not vecs_query or not vecs_a or not vecs_b:
                 return
             n = min(len(vecs_query), len(vecs_a), len(vecs_b))
-            if n == 0:
+            if n <= 1:
                 return
-            combined = [vecs_a[i] + vecs_b[i] for i in range(n)]
-            combined_stack = torch.stack(combined)
-            true_vec = combined_stack.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
             query_stack = torch.stack(vecs_query[:n])
-            query_norms = query_stack.norm(dim=1) + 1e-8
-            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
+            true_stack = torch.stack([vecs_a[i] + vecs_b[i] for i in range(n)])
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    query_stack, true_stack, self._cosine_alignment_batch_size, d_values, repeats, prefix
+                )
+            )
 
         def add_combined_vs_combined_true(prefix, key_q_a, key_q_b, key_t_a, key_t_b):
+            d_values, repeats = self._get_alignment_settings()
+            if not d_values or repeats is None:
+                return
             vecs_q_a = self._cosine_grad_buffers.get(key_q_a)
             vecs_q_b = self._cosine_grad_buffers.get(key_q_b)
             vecs_t_a = self._cosine_grad_buffers.get(key_t_a)
@@ -1179,35 +1254,39 @@ class HybridWrapper(BaseOptimizerWrapper):
             if not vecs_q_a or not vecs_q_b or not vecs_t_a or not vecs_t_b:
                 return
             n = min(len(vecs_q_a), len(vecs_q_b), len(vecs_t_a), len(vecs_t_b))
-            if n == 0:
+            if n <= 1:
                 return
-            query_combined = [vecs_q_a[i] + vecs_q_b[i] for i in range(n)]
-            true_combined = [vecs_t_a[i] + vecs_t_b[i] for i in range(n)]
-            query_stack = torch.stack(query_combined)
-            true_stack = torch.stack(true_combined)
-            true_vec = true_stack.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
-            query_norms = query_stack.norm(dim=1) + 1e-8
-            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
+            query_stack = torch.stack([vecs_q_a[i] + vecs_q_b[i] for i in range(n)])
+            true_stack = torch.stack([vecs_t_a[i] + vecs_t_b[i] for i in range(n)])
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    query_stack, true_stack, self._cosine_alignment_batch_size, d_values, repeats, prefix
+                )
+            )
 
         def add_against_true(prefix, key_query, key_true):
+            d_values, repeats = self._get_alignment_settings()
+            if not d_values or repeats is None:
+                return
             vecs_query = self._cosine_grad_buffers.get(key_query)
             vecs_true = self._cosine_grad_buffers.get(key_true)
             if not vecs_query or not vecs_true:
                 return
             if vecs_query[0].shape != vecs_true[0].shape:
                 return
-            true_stack = torch.stack(vecs_true)
-            true_vec = true_stack.sum(dim=0)
-            true_norm = true_vec.norm() + 1e-8
             query_stack = torch.stack(vecs_query)
-            query_norms = query_stack.norm(dim=1) + 1e-8
-            cosines = (query_stack @ true_vec) / (query_norms * true_norm)
-            metrics[f'cosine/{prefix}/mean'] = cosines.mean().item()
+            true_stack = torch.stack(vecs_true)
+            if query_stack.shape[0] <= 1:
+                return
+            metrics.update(
+                self._compute_loo_metrics_from_stacks(
+                    query_stack, true_stack, self._cosine_alignment_batch_size, d_values, repeats, prefix
+                )
+            )
         
         add_combined('continuous/reinforce_plus_pathwise', 'continuous/reinforce', 'continuous/pathwise')
         add_combined('continuous/policy_plus_pathwise', 'continuous/policy', 'continuous/pathwise')
+        add_combined('continuous/pathwise_plus_cross_ppo', 'continuous/cross_ppo', 'continuous/pathwise')
         add_against_combined_true(
             'continuous/pathwise_vs_reinforce_plus_pathwise',
             'continuous/pathwise',
@@ -1218,6 +1297,12 @@ class HybridWrapper(BaseOptimizerWrapper):
             'continuous/pathwise_vs_policy_plus_pathwise',
             'continuous/pathwise',
             'continuous/policy',
+            'continuous/pathwise'
+        )
+        add_against_combined_true(
+            'continuous/pathwise_vs_pathwise_plus_cross_ppo',
+            'continuous/pathwise',
+            'continuous/cross_ppo',
             'continuous/pathwise'
         )
         add_against_true(

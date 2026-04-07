@@ -1,6 +1,6 @@
-# Hybrid Agent Sweep Configuration
+# Gaussian PPO Separate Net Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_separate_net.yml'
+  hyperparams: 'configs/policies/gaussian_ppo_separate_net.yml'
 
 method: 'grid'
 metric:
@@ -8,34 +8,24 @@ metric:
   goal: 'minimize'
 
 parameters:
-  add_gumbel_noise:
-    values:
-      - false
   anneal_lr:
     values:
       - false
-  buffer_periods:
-    values:
-      - 20
-  clip_coef:
-    values:
-      - 0.15
-  disable_cross_term:
-    values:
-      - true
-  entropy_coef:
-    values:
-      - 0.5
   anneal_entropy_coef:
     values:
       - true
   min_entropy_coef:
     values:
       - 0.001
-  fixed_cost:
-    distribution: categorical
+  entropy_coef:
     values:
-      - 64
+      - 0.5
+  buffer_periods:
+    values:
+      - 20
+  clip_coef:
+    values:
+      - 0.15
   gae_lambda:
     values:
       - 0.96
@@ -54,45 +44,33 @@ parameters:
   normalize_advantages:
     values:
       - true
+  normalize_by_mean_demand:
+    values:
+      - true
   normalize_observations:
     values:
       - false
   num_epochs:
     values:
       - 5
-  pathwise_coef:
-    values:
-      - 5.0
   policy_activation:
     values:
-    - Tanh
+      - Tanh
   reward_scaling:
-    values:
-      - true
-  reward_scaling_pathwise:
     values:
       - true
   use_gae:
     values:
       - true
   value_activation:
-    values: 
+    values:
       - Tanh
   value_function_coef:
     values:
       - 0.15
-  continuous_scale:
-    values:
-      - 1.0
-  continuous_shift:
-    values: 
-      - 1.0
-  normalize_by_mean_demand:
-    values:
-      - true
   use_wandb:
     values:
       - true
-  sweep_top_k_split_by:
+  continuous_shift:
     values:
-      - "n_stores"
+      - 1.0

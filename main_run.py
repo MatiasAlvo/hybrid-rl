@@ -445,7 +445,7 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         'lr_multipliers': lr_multipliers
     }
 
-    if agent_type == 'hybrid_cos_sim':
+    if optimizer_params.get('ppo_params', {}).get('cosine_grad_analysis', False):
         optimizer_wrapper = HybridCosSimWrapper(model, optimizer, problem_params, device=device, **wrapper_params)
     else:
         optimizer_wrapper = HybridWrapper(model, optimizer, problem_params, device=device, **wrapper_params)

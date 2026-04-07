@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_separate_net.yml'
+  hyperparams: 'configs/policies/hybrid_separate_net_heterogen.yml'
 
 method: 'grid'
 metric:

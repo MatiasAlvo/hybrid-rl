@@ -1,5 +1,5 @@
 trainer_params:
-  'epochs': 150
+  'epochs': 200
   'do_dev_every_n_epochs': 1
   'print_results_every_n_epochs': 1
   'save_model': false
@@ -69,7 +69,7 @@ nn_params:
     continuous_scale: 1.0
     continuous_shift: 1.0  # Remember to change to 1.0 afterwards
     # Updated observation keys to match hybrid policy
-    observation_keys: ['store_inventories']
+    observation_keys: ['store_inventories', 'underage_costs', 'holding_costs', 'mean']
     normalize_by_mean_demand: true  # Normalize quantity-related inputs by mean demand
     heads:
       discrete:
@@ -89,5 +89,3 @@ nn_params:
     dropout: 0.0
     batch_norm: false
     output_size: 1
-    # Updated observation keys to match policy network
-    observation_keys: ['store_inventories', 'holding_costs', 'underage_costs', 'lead_times', 'procurement_costs', 'past_demands', 'days_from_christmas']

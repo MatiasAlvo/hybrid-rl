@@ -597,6 +597,7 @@ class PolicyNetwork(nn.Module):
         self.input_size = policy_config['input_size']
         self.hidden_layers = policy_config['hidden_layers']
         self.activation = policy_config['activation']
+        print(f'activation: {self.activation}')
         self.dropout_rate = policy_config.get('dropout', 0.0)
         self.use_batch_norm = policy_config.get('batch_norm', False)
         self.continuous_scale = torch.tensor(policy_config['continuous_scale'], device=device) if policy_config['continuous_scale'] is not None else None
@@ -988,22 +989,27 @@ class SeparateNetworkPolicy(PolicyNetwork):
         
         # Get output dimensions from config
         self.heads = config['policy_network']['heads']
+        self.init_discrete_uniform = bool(
+            config['policy_network'].get('init_discrete_uniform', False)
+        )
         last_hidden = self.hidden_layers[-1]
         
         # Build discrete network
         if self.heads['discrete']['enabled']:
             discrete_layers = self._build_network_layers('discrete', 'Tanh')
-            print(f"Hardcoding discrete network layers to Tanh")
+            # discrete_layers = self._build_network_layers('discrete', self.activation)
             self.discrete_net = nn.Sequential(*discrete_layers)
             self.discrete_head = self.layer_init(
                 nn.Linear(last_hidden, self.heads['discrete']['size']),
                 std=0.01
             )
+            if self.init_discrete_uniform:
+                nn.init.constant_(self.discrete_head.weight, 0.0)
+                nn.init.constant_(self.discrete_head.bias, 0.0)
         
         # Build continuous network  
         if self.heads['continuous']['enabled']:
-            continuous_layers = self._build_network_layers('continuous', 'Tanh')
-            print(f"Hardcoding continuous network layers to Tanh")
+            continuous_layers = self._build_network_layers('continuous', self.activation)
             # continuous_layers = self._build_network_layers('continuous', 'ELU')
             self.continuous_net = nn.Sequential(*continuous_layers)
             self.continuous_head = self.layer_init(
@@ -1064,6 +1070,31 @@ class SeparateNetworkPolicy(PolicyNetwork):
             # Apply scale and shift
             outputs['continuous'] = continuous_output * self.continuous_scale + self.continuous_shift
             # outputs['continuous'] = continuous_output * self.continuous_scale + self.continuous_shift + 20.0
+        
+        return outputs
+
+class SeparateNetworkPolicyFixedContinuousInput(SeparateNetworkPolicy):
+    """
+    Separate-network policy where the continuous net ignores state input.
+    Discrete net uses the real input; continuous net uses a fixed dummy input.
+    """
+    def forward(self, x, process_state=False):
+        if process_state:
+            x = self.flatten_inputs(x)
+        
+        outputs = {}
+        
+        # Process discrete network as usual
+        if 'discrete' in self.heads and self.heads['discrete']['enabled']:
+            discrete_features = self.discrete_net(x)
+            outputs['discrete'] = self.discrete_head(discrete_features).unsqueeze(1)
+        
+        # Process continuous network with fixed dummy input
+        if 'continuous' in self.heads and self.heads['continuous']['enabled']:
+            dummy_input = torch.zeros_like(x)
+            continuous_features = self.continuous_net(dummy_input)
+            continuous_output = self.continuous_head(continuous_features).unsqueeze(1)
+            outputs['continuous'] = continuous_output * self.continuous_scale + self.continuous_shift
         
         return outputs
 
@@ -1144,6 +1175,7 @@ class NeuralNetworkCreator:
             'hybrid_policy_ss': HybridPolicySS,
             'factored_policy': FactoredPolicy,
             'separate_network_policy': SeparateNetworkPolicy,
+            'separate_network_policy_fixed_continuous_input': SeparateNetworkPolicyFixedContinuousInput,
             }
         return architectures[name]
     

@@ -29,7 +29,7 @@ parameters:
       - 0.93
   learning_rate:
     values:
-      - 0.001
+      - 0.01
   max_grad_norm:
     values:
       - 5.0
@@ -44,6 +44,15 @@ parameters:
     values:
       - false
       - true
+  entropy_coef:
+    values:
+      - 0.5
+  anneal_entropy_coef:
+    values:
+      - true
+  min_entropy_coef:
+    values:
+      - 0.001
   normalize_observations:
     values:
       - false

@@ -9,10 +9,12 @@ metric:
 
 parameters:
   run_idx:
-    values: [0, 1, 2]
+    values: [0]
   stores:
+    # values: [1, 3, 5, 7, 10, 20, 30, 50]
     values: [50, 1, 30, 3, 20, 5, 10, 7]
+    # values: [50, 1, 30, 3, 20, 5, 10, 7]
   a_seed:
-    values: [0, 1, 2]
+    values: [0]
   load_model_dir:
     value: models/saved_models/2026_03_13/sweep_top_k/rj7xrc8k/one_store_fixed_costs/separate_network_policy

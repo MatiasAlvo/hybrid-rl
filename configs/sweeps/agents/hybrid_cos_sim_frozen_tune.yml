@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_cos_sim_frozen_v2.yml'
+  hyperparams: 'configs/policies/hybrid_cos_sim_frozen_tune.yml'
 
 method: 'grid'
 metric:
@@ -16,15 +16,15 @@ parameters:
       - "n_stores"
   trainer_epochs:
     values:
-      - 1000
-  degradation_scale_by_store:
-    value:
-      default: 0.0
-      1: 1.4
-      3: 1.4
-      5: 1.4
-      7: 1.2
-      10: 1.2
-      20: 1.2
-      30: 1.2
-      50: 1.2
+      - 100
+  degradation_scale:
+    values:
+      - 0.4
+      - 0.6
+      - 0.8
+      - 1.0
+      - 1.2
+      - 1.4
+      - 1.6
+      - 1.8
+      - 2.0

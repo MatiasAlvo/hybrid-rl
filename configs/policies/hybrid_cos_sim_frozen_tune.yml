@@ -1,6 +1,6 @@
 trainer_params:
   # epochs: 1
-  epochs: 400
+  epochs: 100
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
@@ -45,14 +45,14 @@ agent_params:
   temperature_decay: 0.997
   use_straight_through: false
   add_gumbel_noise: false
-  fixed_std: 0.0 # we will shift using degradation_scale_by_store
+  fixed_std: 0.0
 
 optimizer_params:
-  learning_rate: 0.00002  # Overridden by sweep config
+  learning_rate: 0.001  # Overridden by sweep config
   # learning_rate: 0.00001  # Overridden by sweep config
   anneal_lr: false  # Overridden by sweep config
   weight_decay: 0.0
-  skip_update_every_n_epochs: 2
+  skip_update_every_n_epochs: 0
   lr_multipliers:
     value: 10.0
     backbone: 1.0
@@ -77,19 +77,19 @@ optimizer_params:
     entropy_coef: 0.0
     clip_by_component: true
     disable_cross_term: False
-    cosine_grad_analysis: True
+    cosine_grad_analysis: false
     grad_analysis: false
     # alignment_ds: null
     # alignment_ds: [256]
-    alignment_ds: [256, 512, 1024]
+    alignment_ds: null
     # alignment_repeats: null
-    alignment_repeats: 100
+    alignment_repeats: null
     num_minibatches: 1
     use_reinforce_loss: true
     pathwise_bootstrap_value: true
     loss_schedule:
       # warmup_epochs: 0
-      warmup_epochs: 80
+      warmup_epochs: 0
       warmup_lr_multipliers:
         value: 100.0
         backbone: 0.0
@@ -111,7 +111,7 @@ nn_params:
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0  # Overridden by sweep config
-    continuous_shift: 1.0  # on original training: 1.0. we will shift using degradation_scale_by_store
+    continuous_shift: 1.0  # on original training: 1.0
     # continuous_shift: 4.5  # on original training: 1.0
     # continuous_shift: 10.0  # on original training: 1.0
     observation_keys: ['store_inventories']

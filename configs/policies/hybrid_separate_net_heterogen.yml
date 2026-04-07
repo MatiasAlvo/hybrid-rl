@@ -1,5 +1,5 @@
 trainer_params:
-  epochs: 150
+  epochs: 200
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
@@ -73,15 +73,15 @@ nn_params:
     name: separate_network_policy
     # name: hybrid_policy
     input_size: null
-    hidden_layers: [64, 64]
+    hidden_layers: [512, 512]
     activation: Tanh  # Overridden by sweep config (policy_activation)
     init_discrete_uniform: true
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0  # Overridden by sweep config
-    continuous_shift: 5.0  # Overridden by sweep config
-    observation_keys: ['store_inventories']
-    normalize_by_mean_demand: False
+    continuous_shift: 1.0  # Overridden by sweep config
+    observation_keys: ['store_inventories', 'underage_costs', 'holding_costs', 'mean']
+    normalize_by_mean_demand: true
     heads:
       discrete:
         enabled: true
@@ -94,7 +94,7 @@ nn_params:
 
   value_network:
     enabled: true
-    input_size: 2
+    input_size: null
     hidden_layers: [64, 64]
     activation: Tanh  # Overridden by sweep config (value_activation)
     dropout: 0.0

@@ -168,8 +168,11 @@ class Scenario():
         Sample parameters of demand distribution, if necessary
         """
         
-        if demand_params['sample_across_stores']:  # only supported for normal demand
-            demand_params.update(self.sample_normal_mean_and_std(problem_params, demand_params, seeds))
+        if demand_params['sample_across_stores']:
+            if demand_params['distribution'] == 'normal':
+                demand_params.update(self.sample_normal_mean_and_std(problem_params, demand_params, seeds))
+            elif demand_params['distribution'] == 'poisson':
+                demand_params.update(self.sample_poisson_mean(problem_params, demand_params, seeds))
     
     def generate_normal_demand(self, problem_params, demand_params, seed, periods):
         """
@@ -309,6 +312,21 @@ class Scenario():
         coef_of_var = np.random.uniform(demand_params['coef_of_var_range'][0], demand_params['coef_of_var_range'][1], problem_params['n_stores'])
         stds = (means * coef_of_var).round(3)
         return {'mean': means, 'std': stds}
+
+    def sample_poisson_mean(self, problem_params, demand_params, seeds):
+        """
+        Sample mean for poisson demand
+        """
+
+        # Set seed
+        np.random.seed(seeds['mean'])
+
+        means = np.random.uniform(
+            demand_params['mean_range'][0],
+            demand_params['mean_range'][1],
+            problem_params['n_stores']
+        ).round(3)
+        return {'mean': means}
     
     def generate_data_for_samples_and_stores(self, problem_params, cost_params, seed, discrete=False):
         """

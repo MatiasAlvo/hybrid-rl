@@ -296,6 +296,7 @@ def train_sweep(sweep_config):
                 'reward_scaling_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'reward_scaling_pathwise']),
                 'max_grad_norm': ('hyperparams', ['optimizer_params', 'ppo_params', 'max_grad_norm']),
                 'entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'entropy_coef']),
+                'entropy_coef_scale_log_n_stores': ('hyperparams', ['optimizer_params', 'ppo_params', 'entropy_coef_scale_log_n_stores']),
                 'anneal_entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'anneal_entropy_coef']),
                 'min_entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'min_entropy_coef']),
                 'loss_schedule_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'loss_schedule', 'pathwise']),
@@ -357,6 +358,85 @@ def train_sweep(sweep_config):
                     )
                 return checkpoint_path
 
+            def _apply_degradation_scale(target_config, scale):
+                if scale is None:
+                    return
+                if not isinstance(scale, (int, float)):
+                    raise ValueError(f"degradation_scale must be numeric, got {scale!r}")
+
+                targets = [
+                    (['nn_params', 'policy_network', 'continuous_shift'], 'continuous_shift'),
+                    (['agent_params', 'fixed_std'], 'fixed_std'),
+                ]
+                for path, label in targets:
+                    current = target_config
+                    for key in path[:-1]:
+                        if not isinstance(current, dict) or key not in current:
+                            raise KeyError(f"Missing config path for {label}: {'.'.join(path)}")
+                        current = current[key]
+                    base_value = current.get(path[-1])
+                    if not isinstance(base_value, (int, float)):
+                        raise ValueError(
+                            f"{label} must be numeric to apply degradation_scale, got {base_value!r}"
+                        )
+                    current[path[-1]] = base_value + scale
+
+            def _shift_seed_values(seed_block, offset, label):
+                if seed_block is None:
+                    return
+                if not isinstance(offset, (int, float)):
+                    raise ValueError(f"a_seed must be numeric, got {offset!r}")
+                if isinstance(seed_block, dict):
+                    for key, value in seed_block.items():
+                        if isinstance(value, (int, float)):
+                            seed_block[key] = value + offset
+                        else:
+                            raise ValueError(
+                                f"{label}.{key} must be numeric to apply a_seed, got {value!r}"
+                            )
+                elif isinstance(seed_block, list):
+                    for i, value in enumerate(seed_block):
+                        if isinstance(value, (int, float)):
+                            seed_block[i] = value + offset
+                        else:
+                            raise ValueError(
+                                f"{label}[{i}] must be numeric to apply a_seed, got {value!r}"
+                            )
+                else:
+                    raise ValueError(
+                        f"{label} must be a dict or list to apply a_seed, got {type(seed_block).__name__}"
+                    )
+
+            def _resolve_degradation_scale(run_config, setting_config):
+                if 'degradation_scale_by_store' in run_config:
+                    mapping = run_config.get('degradation_scale_by_store')
+                    if not isinstance(mapping, dict):
+                        raise ValueError(
+                            f"degradation_scale_by_store must be a mapping, got {mapping!r}"
+                        )
+                    n_stores = run_config.get(
+                        'n_stores',
+                        run_config.get(
+                            'stores',
+                            setting_config.get('problem_params', {}).get('n_stores')
+                        )
+                    )
+                    if n_stores is None:
+                        raise ValueError(
+                            "n_stores is required to resolve degradation_scale_by_store."
+                        )
+                    scale = mapping.get(n_stores)
+                    if scale is None:
+                        scale = mapping.get(str(n_stores))
+                    if scale is None and 'default' in mapping:
+                        scale = mapping.get('default')
+                    if scale is None:
+                        raise KeyError(
+                            f"No degradation_scale_by_store entry for n_stores={n_stores}"
+                        )
+                    return scale
+                return run_config.get('degradation_scale')
+
             # Update configs based on sweep parameters from run.config
             for param_name, param_value in run.config.items():
                 if param_name == 'stores':
@@ -401,6 +481,12 @@ def train_sweep(sweep_config):
                         if isinstance(value_network, dict):
                             value_network['hidden_layers'] = param_value
 
+            # Shift seeds and test_seeds by a_seed (if provided)
+            if 'a_seed' in run.config:
+                seed_offset = run.config['a_seed']
+                _shift_seed_values(setting_config.get('seeds'), seed_offset, 'seeds')
+                _shift_seed_values(setting_config.get('test_seeds'), seed_offset, 'test_seeds')
+
             # Override batch_size for train/dev/test in the setting config
             if 'batch_size' in run.config:
                 params_by_dataset = setting_config.get('params_by_dataset', {})
@@ -408,6 +494,12 @@ def train_sweep(sweep_config):
                     split_params = params_by_dataset.get(split_name)
                     if isinstance(split_params, dict):
                         split_params['batch_size'] = run.config['batch_size']
+
+            # Apply a shared perturbation after explicit overrides
+            _apply_degradation_scale(
+                hyperparams_config,
+                _resolve_degradation_scale(run.config, setting_config)
+            )
 
             # Apply pretrained model selection for fixed_costs_cos_sim_frozen sweeps
             if (
