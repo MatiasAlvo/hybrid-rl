@@ -1,0 +1,132 @@
+seeds:
+  'underage_cost': 1
+  'holding_cost': 2
+  'procurement_cost': 3
+  'mean': 4
+  'coef_of_var': 5
+  'lead_time': 6
+  'demand': 7
+  'initial_inventory': 8
+
+test_seeds:
+  'underage_cost': 9
+  'holding_cost': 10
+  'procurement_cost': 11
+  'mean': 12
+  'coef_of_var': 13
+  'lead_time': 14
+  'demand': 15
+  'initial_inventory': 16
+
+wandb_config:
+  group: "lqr_switched"
+  track_params: []
+
+sample_data_params:
+  'split_by_period': false
+  'train_periods': null
+  'dev_periods': null
+  'test_periods': null
+
+problem_params:
+  'setting_name': "lqr_switched"
+  'n_stores': 50
+  'n_warehouses': 0
+  'n_extra_echelons': 0
+  'lost_demand': false
+  'maximize_profit': false
+  'is_hybrid': true
+  'simulator_type': "lqr_hybrid"
+  'n_modes': 2
+  'skip_lqr_mode_validation': true
+  'discrete_features':
+    'lqr_mode':
+      'thresholds': [0, 1, 2]
+      'values': [0, 1]
+  'lqr':
+    'lambda_u': 0.1
+    'seed': 0
+    'instability': 1.10
+    'coupling_strength': 0.05
+    'b_high': 1.0
+    'b_low': 0.15
+
+observation_params:
+  'include_warehouse_inventory': False
+  'include_static_features':
+    'holding_costs': False
+    'underage_costs': False
+    'procurement_costs': False
+    'lead_times': False
+    'upper_bounds': False
+    'mean': False
+    'std': False
+  'demand':
+    'past_periods': 0
+    'period_shift': 0
+  'include_past_observations':
+    'arrivals': 0
+    'orders': 0
+  'time_features_file': null
+  'time_features': null
+  'sample_features_file': null
+  'sample_features': null
+  'normalize_observations': false
+
+store_params:
+  'demand':
+    'distribution': 'poisson'
+    'mean': 1.0
+    'sample_across_stores': False
+    'expand': False
+    'clip': False
+    'decimals': 3
+  'lead_time':
+    'value': 0
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+  'holding_cost':
+    'value': 0.0
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+  'underage_cost':
+    'value': 0.0
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+  'initial_inventory':
+    'sample': True
+    'inventory_periods': 1
+    'uniform_range': [-10.0, 10.0]
+    'scale_by_sqrt_dim': True
+  'procurement_cost':
+    'value': 0.0
+    'vary_across_samples': False
+    'sample_across_stores': False
+    'expand': True
+
+warehouse_params:
+  'holding_cost': 0.0
+  'lead_time': 0
+
+echelon_params:
+  null
+
+params_by_dataset:
+  'train':
+    'n_samples': 1024
+    'batch_size': 128
+    'periods': 20
+    'ignore_periods': 0
+  'dev':
+    'n_samples': 1024
+    'batch_size': 1024
+    'periods': 20
+    'ignore_periods': 0
+  'test':
+    'n_samples': 1024
+    'batch_size': 1024
+    'periods': 20
+    'ignore_periods': 0

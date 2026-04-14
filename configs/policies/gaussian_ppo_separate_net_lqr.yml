@@ -1,0 +1,97 @@
+trainer_params:
+  'epochs': 500
+  'do_dev_every_n_epochs': 1
+  'print_results_every_n_epochs': 1
+  'save_model': false
+  'epochs_between_save': 1
+  'choose_best_model_on': 'dev_loss'
+  'load_previous_model': false
+  'load_model_path': ''
+  'base_dir': 'models/saved_models'
+  'compute_metrics_on_test': false
+
+logging_params: 
+  'use_wandb': true
+  'use_tensorboard': false
+  'wandb_project_name': "lqr_switched"
+  'wandb_entity': "alvomatias"
+  'exp_name': "gaussian_ppo"
+  'env_name': "lqr_switched"
+  'setting_name': "lqr_switched"
+  'log_inventory_action_plot': false
+  'log_inventory_value_plot': false
+  'log_inventory_discrete_action0_prob_plot': false
+  log_inventory_action0_heatmap: false
+
+
+agent_params:
+  'agent_type': 'gaussian_ppo'
+  'fixed_std': true  # Set to false for state-dependent standard deviation
+
+optimizer_params:
+  # 'learning_rate': 0.015
+  'learning_rate': 0.0002
+  'anneal_lr': false
+  'weight_decay': 0.0
+  'lr_multipliers':
+    'value': 1.0
+    'backbone': 1.0
+    'continuous': 1.0
+    'discrete': 1.0
+    'other': 1.0
+  'ppo_params':
+    'clip_coef': 0.2
+    'gamma': 0.99
+    'gae_lambda': 0.95
+    'normalize_advantages': true
+    'normalize_observations': false
+    'pathwise_coef': 1.0
+    'reward_scaling': false
+    'reward_scaling_pathwise': false
+    'clip_value_loss': false
+    'entropy_coef': 0.01
+    'anneal_entropy_coef': true
+    'min_entropy_coef': 0.0
+    'use_gae': true
+    'num_epochs': 5
+    'value_function_coef': 0.1
+    'clip_by_component': true
+    'buffer_periods': 0
+    'max_grad_norm': 5.0
+
+nn_params:
+  policy_network:
+    name: 'separate_network_policy'
+    input_size: null  # Let it be determined automatically
+    hidden_layers: [512, 512]
+    # activation: 'ELU'
+    activation: 'Tanh'
+    init_discrete_uniform: true
+    dropout: 0.0
+    batch_norm: false
+    continuous_scale: 1.0
+    continuous_shift: 0.0  # Remember to change to 1.0 afterwards
+    # Updated observation keys to match hybrid policy
+    observation_keys: ['store_inventories']
+    normalize_by_mean_demand: False  # Normalize quantity-related inputs by mean demand
+    disable_continuous_scaling: true
+    heads:
+      discrete:
+        enabled: true
+        size: 0 # override in range manager
+        activation: 'Linear'
+      continuous:
+        enabled: true
+        size: 0 # override in range manager
+        activation: 'Linear'
+
+  value_network:
+    enabled: true
+    input_size: null  # Let it be determined automatically
+    hidden_layers: [64, 64]
+    activation: 'Tanh'
+    dropout: 0.0
+    batch_norm: false
+    output_size: 1
+    # Updated observation keys to match policy network
+    observation_keys: ['store_inventories']

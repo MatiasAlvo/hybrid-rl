@@ -9,7 +9,7 @@ trainer_params:
   load_model_path: 'models/saved_models/2025_10_22/one_store_fixed_costs/hybrid_policy/1761149697_246.pt'
   base_dir: models/saved_models
   compute_metrics_on_test: false
-  sweep_top_k: 1
+  sweep_top_k: 0
 
 logging_params:
   use_wandb: true  # Overridden by sweep config

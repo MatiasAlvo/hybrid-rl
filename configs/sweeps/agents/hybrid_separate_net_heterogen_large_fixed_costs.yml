@@ -1,0 +1,95 @@
+# Hybrid Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/hybrid_separate_net_heterogen.yml'
+
+method: 'grid'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  add_gumbel_noise:
+    values:
+      - false
+  anneal_lr:
+    values:
+      - false
+  buffer_periods:
+    values:
+      - 20
+  clip_coef:
+    values:
+      - 0.15
+  disable_cross_term:
+    values:
+      - true
+      - false
+  entropy_coef:
+    values:
+      - 0.5
+  anneal_entropy_coef:
+    values:
+      - true
+  min_entropy_coef:
+    values:
+      - 0.001
+  gae_lambda:
+    values:
+      - 0.96
+  gamma:
+    values:
+      - 0.93
+  hidden_layers:
+    values:
+      - [512, 512]
+  learning_rate:
+    values:
+      - 0.001
+  max_grad_norm:
+    values:
+      - 5.0
+  normalize_advantages:
+    values:
+      - true
+  normalize_observations:
+    values:
+      - false
+  num_epochs:
+    values:
+      - 5
+  pathwise_coef:
+    values:
+      - 1.0
+  policy_activation:
+    values:
+    - Tanh
+  reward_scaling:
+    values:
+      - true
+  reward_scaling_pathwise:
+    values:
+      - true
+  use_gae:
+    values:
+      - true
+  value_activation:
+    values: 
+      - Tanh
+  value_function_coef:
+    values:
+      - 0.15
+  continuous_scale:
+    values:
+      - 1.0
+  continuous_shift:
+    values: 
+      - 1.0
+  normalize_by_mean_demand:
+    values:
+      - true
+  use_wandb:
+    values:
+      - true
+  sweep_top_k_split_by:
+    values:
+      - "n_stores"

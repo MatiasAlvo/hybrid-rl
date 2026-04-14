@@ -178,6 +178,16 @@ class Trainer():
                             epoch,
                             dev_loss=dev_metrics['loss/reported']
                         )
+
+                    # Generate and log inventory vs action0 prob heatmap
+                    if logging_params.get('log_inventory_action0_heatmap', False):
+                        self.log_inventory_action0_heatmap(
+                            dev_metrics['trajectory_data'],
+                            epoch,
+                            dev_loss=dev_metrics['loss/reported'],
+                            simulator=simulator,
+                            additional_data=additional_data
+                        )
                 
                 self.logger.flush_metrics()
             
@@ -1497,5 +1507,257 @@ class Trainer():
             
         except Exception as e:
             print(f"Error generating inventory ordering heatmap: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def log_inventory_action0_heatmap(self, trajectory_data, epoch, dev_loss=None, store_0=0, store_1=1, simulator=None, additional_data=None):
+        """
+        Generate and log a heatmap showing the probability of discrete action 0
+        as a function of inventory levels at two stores.
+        """
+        try:
+            if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
+                return
+            
+            if ("store_inventories" not in trajectory_data or 
+                "discrete_logits" not in trajectory_data or
+                len(trajectory_data["discrete_logits"]) == 0):
+                print("Missing required data for inventory action0 heatmap")
+                return
+            
+            if isinstance(trajectory_data["store_inventories"], list):
+                inventory_tensor = torch.stack(trajectory_data["store_inventories"], dim=0)
+            else:
+                inventory_tensor = trajectory_data["store_inventories"]
+            
+            if isinstance(trajectory_data["discrete_logits"], list):
+                discrete_logits_tensor = torch.stack(trajectory_data["discrete_logits"], dim=0)
+            else:
+                discrete_logits_tensor = trajectory_data["discrete_logits"]
+            
+            if len(inventory_tensor.shape) >= 3:
+                T, B = inventory_tensor.shape[0], inventory_tensor.shape[1]
+                if inventory_tensor.shape[2] == 1:
+                    print("Inventory has already been summed across stores; need per-store inventories.")
+                    return
+                n_stores = inventory_tensor.shape[2]
+            else:
+                print(f"ERROR: Unexpected tensor shape: {inventory_tensor.shape}")
+                return
+            
+            if n_stores < 2:
+                print(f"Need at least 2 stores for 2D heatmap, but only have {n_stores}")
+                return
+            
+            if store_0 >= n_stores or store_1 >= n_stores:
+                print(f"Store indices ({store_0}, {store_1}) out of range for {n_stores} stores")
+                return
+            
+            inventories_flat = inventory_tensor.reshape(-1, n_stores, *inventory_tensor.shape[3:]).detach().cpu()
+            discrete_logits_flat = discrete_logits_tensor.reshape(-1, discrete_logits_tensor.shape[-1]).detach().cpu()
+            
+            # Use on-hand inventory if lead-time dimension exists
+            if inventories_flat.dim() == 3:
+                inventories_flat = inventories_flat[:, :, 0]
+            
+            inv_store_0 = torch.round(inventories_flat[:, store_0]).numpy().astype(int)
+            inv_store_1 = torch.round(inventories_flat[:, store_1]).numpy().astype(int)
+            
+            discrete_probs = torch.softmax(discrete_logits_flat, dim=-1)
+            action0_probs = discrete_probs[:, 0].numpy()
+            
+            min_inv_0, max_inv_0 = inv_store_0.min(), inv_store_0.max()
+            min_inv_1, max_inv_1 = inv_store_1.min(), inv_store_1.max()
+            
+            x_bins = np.arange(min_inv_0, max_inv_0 + 2)
+            y_bins = np.arange(min_inv_1, max_inv_1 + 2)
+            
+            prob_sum = np.zeros((len(y_bins) - 1, len(x_bins) - 1))
+            counts = np.zeros((len(y_bins) - 1, len(x_bins) - 1))
+            
+            for i in range(len(inv_store_0)):
+                x_idx = np.searchsorted(x_bins, inv_store_0[i], side='right') - 1
+                y_idx = np.searchsorted(y_bins, inv_store_1[i], side='right') - 1
+                if 0 <= x_idx < len(x_bins) - 1 and 0 <= y_idx < len(y_bins) - 1:
+                    prob_sum[y_idx, x_idx] += action0_probs[i]
+                    counts[y_idx, x_idx] += 1
+            
+            avg_probs = np.divide(prob_sum, counts, where=counts > 0, out=np.full_like(prob_sum, np.nan))
+
+            overlay_coords = None
+            if simulator is not None and hasattr(simulator, 'problem_params'):
+                lqr_params = simulator.problem_params.get('lqr', {})
+                if all(k in lqr_params for k in ('A', 'B', 'Q', 'R')):
+                    A = torch.tensor(lqr_params['A'], dtype=torch.float32)
+                    B = torch.tensor(lqr_params['B'], dtype=torch.float32)
+                    Q = torch.tensor(lqr_params['Q'], dtype=torch.float32)
+                    R = torch.tensor(lqr_params['R'], dtype=torch.float32)
+
+                    default_P = [
+                        [[6.065, 1.206], [1.206, 1.905]],
+                        [[9.087, 3.235], [3.235, 2.348]],
+                        [[5.108, 1.266], [1.266, 1.935]],
+                        [[7.219, 2.561], [2.561, 2.107]],
+                    ]
+                    P_list = simulator.problem_params.get('lqr_policy_P_matrices', default_P)
+                    P = torch.tensor(P_list, dtype=torch.float32)
+
+                    n_modes = A.shape[0]
+                    n_p = P.shape[0]
+                    rho_list = []
+                    eye = torch.eye(B.shape[2], dtype=torch.float32)
+                    for mode_idx in range(n_modes):
+                        rho_mode = []
+                        for p_idx in range(n_p):
+                            BtP = B[mode_idx].transpose(0, 1) @ P[p_idx]
+                            inv_term = torch.linalg.inv(R[mode_idx] + BtP @ B[mode_idx] + 1e-8 * eye)
+                            rho = (
+                                Q[mode_idx]
+                                + A[mode_idx].transpose(0, 1) @ P[p_idx] @ A[mode_idx]
+                                - A[mode_idx].transpose(0, 1) @ P[p_idx] @ B[mode_idx] @ inv_term @ BtP @ A[mode_idx]
+                            )
+                            rho_mode.append(rho)
+                        rho_list.append(torch.stack(rho_mode, dim=0))
+                    rho_mats = torch.stack(rho_list, dim=0)  # [m, p, 2, 2]
+
+                    x_centers = (x_bins[:-1] + x_bins[1:]) / 2.0
+                    y_centers = (y_bins[:-1] + y_bins[1:]) / 2.0
+                    grid_x, grid_y = np.meshgrid(x_centers, y_centers)
+                    points = torch.tensor(
+                        np.stack([grid_x.ravel(), grid_y.ravel()], axis=-1),
+                        dtype=torch.float32
+                    )  # [N, 2]
+                    scores = torch.einsum('ni,mkij,nj->nmk', points, rho_mats, points)
+                    flat_scores = scores.reshape(points.shape[0], -1)
+                    best_flat_idx = torch.argmin(flat_scores, dim=-1)
+                    best_mode = (best_flat_idx // n_p)
+                    action0_mask = (best_mode == 0).reshape(grid_x.shape)
+                    overlay_coords = (grid_x[action0_mask], grid_y[action0_mask])
+
+            def log_heatmap(values, metric_key, colorbar_label, title_prefix, vmin=None, vmax=None):
+                fig, ax = plt.subplots(figsize=(14, 10))
+                im = ax.imshow(
+                    values,
+                    origin='lower',
+                    aspect='auto',
+                    extent=[min_inv_0, max_inv_0 + 1, min_inv_1, max_inv_1 + 1],
+                    cmap='RdYlBu_r',
+                    vmin=vmin,
+                    vmax=vmax,
+                    interpolation='nearest'
+                )
+
+                cbar = plt.colorbar(im, ax=ax)
+                cbar.set_label(colorbar_label, fontsize=14)
+
+                title = f'{title_prefix} (Epoch {epoch})'
+                if dev_loss is not None:
+                    title += f' - Dev Loss: {dev_loss:.4f}'
+                ax.set_title(title, fontsize=18)
+                ax.set_xlabel('s₁', fontsize=16)
+                ax.set_ylabel('s₂', fontsize=16)
+                ax.grid(True, alpha=0.3, color='white', linewidth=0.5)
+                if overlay_coords is not None and overlay_coords[0].size > 0:
+                    ax.scatter(
+                        overlay_coords[0],
+                        overlay_coords[1],
+                        marker='*',
+                        s=20,
+                        color='black',
+                        alpha=0.7
+                    )
+
+                plt.tight_layout()
+
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png', dpi=150)
+                buf.seek(0)
+                img = Image.open(buf)
+
+                self.logger.current_metrics[metric_key] = wandb.Image(img)
+                plt.close()
+
+            log_heatmap(
+                avg_probs,
+                'inventory_action0_heatmap',
+                'Probability of Mode 1',
+                'Mode 1 Probability Heatmap',
+                vmin=0,
+                vmax=1
+            )
+
+            continuous_values = None
+            if additional_data is not None and isinstance(additional_data, dict):
+                continuous_values = additional_data.get('continuous_values')
+
+            discrete_indices_tensor = trajectory_data.get('discrete_action_indices')
+
+            if continuous_values is not None and discrete_indices_tensor is not None:
+                if isinstance(continuous_values, list):
+                    continuous_values_tensor = torch.stack(continuous_values, dim=0)
+                else:
+                    continuous_values_tensor = continuous_values
+
+                if isinstance(discrete_indices_tensor, list):
+                    discrete_indices_tensor = torch.stack(discrete_indices_tensor, dim=0)
+
+                continuous_values_flat = continuous_values_tensor.reshape(
+                    -1,
+                    continuous_values_tensor.shape[2],
+                    continuous_values_tensor.shape[-1]
+                ).detach().cpu()
+
+                discrete_indices_flat = discrete_indices_tensor.reshape(-1, *discrete_indices_tensor.shape[2:]).detach().cpu()
+
+                if discrete_indices_flat.dim() == 1:
+                    selected_modes = discrete_indices_flat
+                elif discrete_indices_flat.dim() == 2:
+                    if discrete_indices_flat.shape[1] == 1:
+                        selected_modes = discrete_indices_flat[:, 0]
+                    else:
+                        selected_modes = discrete_indices_flat[:, store_0]
+                else:
+                    print(f"Unexpected discrete action indices shape: {tuple(discrete_indices_flat.shape)}")
+                    selected_modes = None
+
+                if selected_modes is not None:
+                    if store_0 >= continuous_values_flat.shape[1]:
+                        print(f"Store index {store_0} out of range for continuous values.")
+                        return
+
+                    selected_modes = selected_modes.long().clamp(min=0, max=continuous_values_flat.shape[-1] - 1)
+                    action0_values = continuous_values_flat[
+                        torch.arange(continuous_values_flat.shape[0]),
+                        store_0,
+                        selected_modes
+                    ].numpy()
+
+                    action_sum = np.zeros((len(y_bins) - 1, len(x_bins) - 1))
+                    action_counts = np.zeros((len(y_bins) - 1, len(x_bins) - 1))
+
+                    for i in range(len(inv_store_0)):
+                        x_idx = np.searchsorted(x_bins, inv_store_0[i], side='right') - 1
+                        y_idx = np.searchsorted(y_bins, inv_store_1[i], side='right') - 1
+                        if 0 <= x_idx < len(x_bins) - 1 and 0 <= y_idx < len(y_bins) - 1:
+                            action_sum[y_idx, x_idx] += action0_values[i]
+                            action_counts[y_idx, x_idx] += 1
+
+                    avg_actions = np.divide(
+                        action_sum,
+                        action_counts,
+                        where=action_counts > 0,
+                        out=np.full_like(action_sum, np.nan)
+                    )
+
+                    log_heatmap(
+                        avg_actions,
+                        'inventory_action0_continuous_heatmap',
+                        f'Continuous Action (Store {store_0}, Selected Mode)',
+                        f'Selected Continuous Action Heatmap'
+                    )
+            else:
+                print("Missing continuous values or discrete action indices for continuous action heatmap.")
+        except Exception as e:
+            print(f"Error generating inventory action0 heatmap: {e}")
             import traceback
             traceback.print_exc()

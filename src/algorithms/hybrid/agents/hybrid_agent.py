@@ -6,6 +6,7 @@ from src.algorithms.common.values.value_network import ValueNetwork
 import torch.nn as nn
 import torch.distributions as dist
 import numpy as np
+from scipy.linalg import solve_discrete_are
 
 class BaseAgent(nn.Module):
     def __init__(self, config, feature_registry=None, device='cpu'):
@@ -316,13 +317,15 @@ class HybridAgent(BaseAgent):
         #     discrete_output[key] = discrete_output[key].detach()
         
         # Process continuous outputs
+        apply_scaling = not self.policy_config.get('disable_continuous_scaling', False)
         continuous_output = self.feature_registry.process_continuous_output(
             raw_outputs.get('continuous'),
             discrete_action_indices=discrete_output['discrete_action_indices'],
             continuous_mean=raw_outputs.get('continuous_mean'),
             continuous_log_std=raw_outputs.get('continuous_log_std'),
             random_continuous=False,  # Default to deterministic continuous actions
-            observations=observation
+            observations=observation,
+            apply_scaling=apply_scaling
         )
         
         # Compute feature actions
@@ -337,7 +340,7 @@ class HybridAgent(BaseAgent):
             'discrete_action_indices': discrete_output['discrete_action_indices'],
             'log_probs': discrete_output['log_probs'],
             'continuous_values': continuous_output['continuous_values'],
-            # 'raw_continuous_samples': continuous_output['raw_continuous_samples'].detach().clone(),
+            'raw_continuous_samples': continuous_output['raw_continuous_samples'],
             'feature_actions': feature_actions
         }
         
@@ -620,6 +623,268 @@ class FixedContinuousHybridAgent(FixedDiscreteHybridAgent):
             'action_dict': action_dict,
             'value': value,
             'raw_outputs': raw_outputs,
+            'vectorized_observation': processed_obs
+        }
+
+class SwitchedLqrPolicyAgent(BaseAgent):
+    """
+    Fixed switched LQR policy based on a finite set of P matrices (H^eps_k).
+    Selects (mode, P) that minimizes x^T rho_i(P) x, then applies u = -K_i(P) x.
+    """
+    def __init__(self, config, feature_registry=None, device='cpu'):
+        super().__init__(config, feature_registry, device)
+        self.agent_params = config.get('agent_params', {})
+        self._dummy_param = nn.Parameter(torch.zeros(1, device=self.device))
+        self._load_lqr_matrices(config)
+        self._load_policy_matrices()
+        self._precompute_policy_terms()
+
+    def _init_policy(self, config):
+        policy = nn.Identity()
+        policy.trainable = False
+        policy.observation_keys = self.policy_config.get('observation_keys', ['store_inventories'])
+        return policy
+
+    def _get_required_losses(self):
+        return {
+            'policy_gradient': False,
+            'value': False,
+            'pathwise': False,
+            'entropy': False
+        }
+
+    def _load_lqr_matrices(self, config):
+        problem_params = config['scenario'].problem_params
+        lqr_params = problem_params.get('lqr', {})
+        missing = [key for key in ('A', 'B', 'Q', 'R') if key not in lqr_params]
+        if missing:
+            raise ValueError(f"Missing LQR parameters for SwitchedLqrPolicyAgent: {missing}.")
+
+        self.lqr_A = torch.tensor(lqr_params['A'], device=self.device, dtype=torch.float32)
+        self.lqr_B = torch.tensor(lqr_params['B'], device=self.device, dtype=torch.float32)
+        self.lqr_Q = torch.tensor(lqr_params['Q'], device=self.device, dtype=torch.float32)
+        self.lqr_R = torch.tensor(lqr_params['R'], device=self.device, dtype=torch.float32)
+
+        self.n_modes, self.state_dim, _ = self.lqr_A.shape
+        self.action_dim = self.lqr_B.shape[2]
+
+    def _load_policy_matrices(self):
+        default_P = [
+            [[6.065, 1.206], [1.206, 1.905]],
+            [[9.087, 3.235], [3.235, 2.348]],
+            [[5.108, 1.266], [1.266, 1.935]],
+            [[7.219, 2.561], [2.561, 2.107]],
+        ]
+        P_list = self.agent_params.get('lqr_policy_P_matrices', default_P)
+        self.P_mats = torch.tensor(P_list, device=self.device, dtype=torch.float32)
+        if self.P_mats.dim() != 3 or self.P_mats.shape[1:] != (self.state_dim, self.state_dim):
+            raise ValueError(
+                f"Expected P matrices of shape [n_P, {self.state_dim}, {self.state_dim}], "
+                f"got {tuple(self.P_mats.shape)}."
+            )
+
+    def _precompute_policy_terms(self):
+        n_P = self.P_mats.shape[0]
+        rho_list = []
+        K_list = []
+        eye = torch.eye(self.action_dim, device=self.device, dtype=torch.float32)
+
+        for mode_idx in range(self.n_modes):
+            A = self.lqr_A[mode_idx]
+            B = self.lqr_B[mode_idx]
+            Q = self.lqr_Q[mode_idx]
+            R = self.lqr_R[mode_idx]
+            rho_mode = []
+            K_mode = []
+            for p_idx in range(n_P):
+                P = self.P_mats[p_idx]
+                BtP = B.transpose(0, 1) @ P
+                inv_term = torch.linalg.inv(R + BtP @ B + 1e-8 * eye)
+                rho = Q + A.transpose(0, 1) @ P @ A - A.transpose(0, 1) @ P @ B @ inv_term @ BtP @ A
+                K = inv_term @ BtP @ A
+                rho_mode.append(rho)
+                K_mode.append(K)
+            rho_list.append(torch.stack(rho_mode, dim=0))
+            K_list.append(torch.stack(K_mode, dim=0))
+
+        self.rho_mats = torch.stack(rho_list, dim=0)  # [n_modes, n_P, n_state, n_state]
+        self.K_mats = torch.stack(K_list, dim=0)      # [n_modes, n_P, n_action, n_state]
+
+    def forward(self, observation, train=True):
+        x = observation['store_inventories']
+        if x.dim() == 3:
+            x = x[:, :, 0]
+        if x.shape[1] != self.state_dim:
+            raise ValueError(
+                f"State dimension mismatch: expected {self.state_dim}, got {x.shape[1]}."
+            )
+
+        # Compute x^T rho_i(P) x for all modes and P
+        scores = torch.einsum('bi,mkij,bj->bmk', x, self.rho_mats, x)
+        n_P = self.P_mats.shape[0]
+        flat_scores = scores.reshape(scores.shape[0], -1)
+        best_flat_idx = torch.argmin(flat_scores, dim=-1)
+        best_mode = (best_flat_idx // n_P).long()
+        best_p = (best_flat_idx % n_P).long()
+
+        # Log ratio of discrete action 0 and basic state stats
+        ratio_action0 = (best_mode == 0).float().mean().item()
+        inventory_sum = x.sum(dim=1).mean().item()
+        current_period = observation.get('current_period')
+        if torch.is_tensor(current_period):
+            current_period = int(current_period.item())
+        print(
+            f"[SwitchedLqrPolicyAgent] period={current_period} "
+            f"inventory_sum_mean={inventory_sum:.4f} "
+            f"action0_ratio={ratio_action0:.4f}"
+        )
+
+        # Select gain and compute control u = -K x
+        K_selected = self.K_mats[best_mode, best_p]  # [B, n_action, n_state]
+        u = -torch.einsum('bij,bj->bi', K_selected, x)  # [B, n_action]
+
+        # Build discrete one-hot probabilities [B, 1, n_modes]
+        discrete_probs = torch.zeros(x.shape[0], 1, self.n_modes, device=self.device, dtype=x.dtype)
+        discrete_probs.scatter_(2, best_mode.view(-1, 1, 1), 1.0)
+        discrete_action_indices = best_mode.view(-1, 1)
+
+        # Build continuous_values [B, n_stores, n_sub_ranges]
+        n_stores = self.feature_registry.n_stores
+        n_sub_ranges = self.feature_registry.n_sub_ranges
+        u_full = torch.zeros(x.shape[0], n_stores, device=self.device, dtype=x.dtype)
+        u_full[:, :self.action_dim] = u
+        continuous_values = torch.zeros(x.shape[0], n_stores, n_sub_ranges, device=self.device, dtype=x.dtype)
+        continuous_values.scatter_(2, best_mode.view(-1, 1, 1).expand(-1, n_stores, 1), u_full.unsqueeze(-1))
+
+        feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
+            discrete_probs,
+            continuous_values
+        )
+
+        action_dict = {
+            'discrete_probs': discrete_probs,
+            'discrete_action_indices': discrete_action_indices,
+            'log_probs': None,
+            'continuous_values': continuous_values,
+            'feature_actions': feature_actions
+        }
+
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': {},
+            'vectorized_observation': processed_obs
+        }
+
+class FixedModeLqrRiccatiAgent(BaseAgent):
+    """
+    Fixed-mode LQR policy using the discrete-time Riccati solution for one mode.
+    The discrete action is hardcoded to a single mode, and control is u = -Kx.
+    """
+    def __init__(self, config, feature_registry=None, device='cpu'):
+        super().__init__(config, feature_registry, device)
+        self.agent_params = config.get('agent_params', {})
+        self._dummy_param = nn.Parameter(torch.zeros(1, device=self.device))
+        self._load_lqr_matrices(config)
+        self._load_fixed_mode()
+        self._compute_lqr_gain()
+
+    def _init_policy(self, config):
+        policy = nn.Identity()
+        policy.trainable = False
+        policy.observation_keys = self.policy_config.get('observation_keys', ['store_inventories'])
+        return policy
+
+    def _get_required_losses(self):
+        return {
+            'policy_gradient': False,
+            'value': False,
+            'pathwise': False,
+            'entropy': False
+        }
+
+    def _load_lqr_matrices(self, config):
+        problem_params = config['scenario'].problem_params
+        lqr_params = problem_params.get('lqr', {})
+        missing = [key for key in ('A', 'B', 'Q', 'R') if key not in lqr_params]
+        if missing:
+            raise ValueError(f"Missing LQR parameters for FixedModeLqrRiccatiAgent: {missing}.")
+
+        self.lqr_A = torch.tensor(lqr_params['A'], device=self.device, dtype=torch.float32)
+        self.lqr_B = torch.tensor(lqr_params['B'], device=self.device, dtype=torch.float32)
+        self.lqr_Q = torch.tensor(lqr_params['Q'], device=self.device, dtype=torch.float32)
+        self.lqr_R = torch.tensor(lqr_params['R'], device=self.device, dtype=torch.float32)
+
+        self.n_modes, self.state_dim, _ = self.lqr_A.shape
+        self.action_dim = self.lqr_B.shape[2]
+
+    def _load_fixed_mode(self):
+        self.fixed_mode = int(self.agent_params.get('fixed_lqr_mode', 0))
+        if self.fixed_mode < 0 or self.fixed_mode >= self.n_modes:
+            raise ValueError(
+                f"fixed_lqr_mode must be in [0, {self.n_modes - 1}], got {self.fixed_mode}."
+            )
+
+    def _compute_lqr_gain(self):
+        mode = self.fixed_mode
+        A = self.lqr_A[mode].detach().cpu().numpy()
+        B = self.lqr_B[mode].detach().cpu().numpy()
+        Q = self.lqr_Q[mode].detach().cpu().numpy()
+        R = self.lqr_R[mode].detach().cpu().numpy()
+
+        P = solve_discrete_are(A, B, Q, R)
+        BtP = B.T @ P
+        K = np.linalg.solve(R + BtP @ B, BtP @ A)
+
+        self.P = torch.tensor(P, device=self.device, dtype=torch.float32)
+        self.K = torch.tensor(K, device=self.device, dtype=torch.float32)
+
+    def forward(self, observation, train=True):
+        x = observation['store_inventories']
+        if x.dim() == 3:
+            x = x[:, :, 0]
+        if x.shape[1] != self.state_dim:
+            raise ValueError(
+                f"State dimension mismatch: expected {self.state_dim}, got {x.shape[1]}."
+            )
+
+        u = -torch.einsum('ij,bj->bi', self.K, x)
+
+        batch_size = x.shape[0]
+        discrete_probs = torch.zeros(batch_size, 1, self.n_modes, device=self.device, dtype=x.dtype)
+        mode_idx = torch.full((batch_size, 1), self.fixed_mode, device=self.device, dtype=torch.long)
+        discrete_probs.scatter_(2, mode_idx.unsqueeze(-1), 1.0)
+
+        n_stores = self.feature_registry.n_stores
+        n_sub_ranges = self.feature_registry.n_sub_ranges
+        u_full = torch.zeros(batch_size, n_stores, device=self.device, dtype=x.dtype)
+        u_full[:, :self.action_dim] = u
+        continuous_values = torch.zeros(batch_size, n_stores, n_sub_ranges, device=self.device, dtype=x.dtype)
+        continuous_values.scatter_(2, mode_idx.unsqueeze(1).expand(-1, n_stores, 1), u_full.unsqueeze(-1))
+
+        feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
+            discrete_probs,
+            continuous_values
+        )
+
+        action_dict = {
+            'discrete_probs': discrete_probs,
+            'discrete_action_indices': mode_idx,
+            'log_probs': None,
+            'continuous_values': continuous_values,
+            'feature_actions': feature_actions
+        }
+
+        processed_obs = self.feature_registry.prepare_inputs(observation)
+        value = self.value_net(processed_obs, process_state=False) if self.value_net is not None else None
+
+        return {
+            'action_dict': action_dict,
+            'value': value,
+            'raw_outputs': {},
             'vectorized_observation': processed_obs
         }
 
@@ -1345,6 +1610,8 @@ class GaussianPPOAgent(HybridAgent):
         # Store these in raw_outputs
         raw_outputs['continuous_mean'] = continuous_mean
         raw_outputs['continuous_log_std'] = continuous_log_std
+
+        apply_scaling = not self.policy_config.get('disable_continuous_scaling', False)
         
         # Process network output
         action_dict = self.feature_registry.process_network_output(
@@ -1352,7 +1619,8 @@ class GaussianPPOAgent(HybridAgent):
             argmax=not train, 
             sample=train,
             random_continuous=train,
-            observations=observation
+            observations=observation,
+            apply_scaling=apply_scaling
         )
         
         # Get value if value network exists

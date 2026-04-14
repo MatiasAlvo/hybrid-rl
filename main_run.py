@@ -14,6 +14,8 @@ from torch.utils.data import DataLoader
 from src.envs.inventory.env import InventoryEnv
 from src.envs.inventory.simulator import Simulator
 from src.envs.inventory.hybrid_simulator import HybridSimulator
+from src.envs.inventory.lqr_hybrid_simulator import LqrHybridSimulator
+from src.envs.inventory.lqr_matrix_store import prepare_lqr_matrices
 from src.envs.inventory.range_manager import RangeManager
 
 # Algorithm imports
@@ -31,7 +33,9 @@ from src.algorithms.hybrid.agents.hybrid_agent import (
     TrainableBaseStockHybridAgent,
     OptimalMultiItem,
     AlternateHybridAgent,
-    VarianceScalingAgent
+    VarianceScalingAgent,
+    SwitchedLqrPolicyAgent,
+    FixedModeLqrRiccatiAgent
 )
 from src.algorithms.hybrid.agents.hybrid_cos_sim_agent import HybridCosSimAgent
 
@@ -381,6 +385,8 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         'factored_hybrid': FactoredHybridAgent,
         'fixed_discrete_hybrid': FixedDiscreteHybridAgent,
         'fixed_continuous_hybrid': FixedContinuousHybridAgent,
+        'switched_lqr_policy': SwitchedLqrPolicyAgent,
+        'fixed_mode_lqr_riccati': FixedModeLqrRiccatiAgent,
         'trainable_base_stock_hybrid': TrainableBaseStockHybridAgent,
         'optimal_multi_item': OptimalMultiItem,
         'alternate_hybrid': AlternateHybridAgent,
@@ -467,9 +473,15 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         reset_param_groups(model, optimizer, reset_groups)
 
     # Initialize simulator based on type
-    simulator = (HybridSimulator(feature_registry, model=model, device=device) 
-                if feature_registry else 
-                Simulator(device=device))
+    simulator_type = problem_params.get('simulator_type')
+    if simulator_type == 'lqr_hybrid':
+        if feature_registry is None:
+            raise ValueError("LQR hybrid simulator requires a feature_registry (is_hybrid must be true).")
+        simulator = LqrHybridSimulator(feature_registry, model=model, device=device)
+    else:
+        simulator = (HybridSimulator(feature_registry, model=model, device=device) 
+                    if feature_registry else 
+                    Simulator(device=device))
 
     # raise an error if the setting_config['problem_params']['setting_name'] is not equal to the hyperparams_config['logging_params']['setting_name']
     if setting_config['problem_params']['setting_name'] != hyperparams_config['logging_params']['setting_name']:
@@ -564,6 +576,7 @@ if __name__ == "__main__":
 
     apply_setting_overrides(setting_config)
     scale_fixed_cost_by_stores(setting_config)
+    prepare_lqr_matrices(setting_config.get('problem_params', {}))
 
     # Run training/testing with specified mode
     train_metrics, dev_metrics, test_metrics = run_training(setting_config, hyperparams_config, mode=mode)

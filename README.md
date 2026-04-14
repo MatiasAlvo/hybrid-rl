@@ -67,6 +67,19 @@ python3 main_run.py train
 ```
 and specify the filenames within the main script.
 
+## Switched LQR simulator
+
+Use the LQR hybrid simulator by setting `problem_params.simulator_type` to `lqr_hybrid`. The discrete action selects the mode, and the continuous action has dimension `n_stores`.
+
+You can either provide explicit per-mode matrices `A`, `B`, `Q`, `R` under `problem_params.lqr`, or let the system generate and cache them:
+
+- Set `problem_params.n_stores` (state dimension) and `problem_params.n_modes` (number of discrete modes).
+- Provide `problem_params.lqr.lambda_u` (control penalty) and optional `problem_params.lqr.seed`.
+- If `problem_params.lqr.source_path` is set, matrices are loaded from that `.npz`.
+- Otherwise, matrices are generated deterministically and cached under `configs/matrices/`.
+
+An example setting file is provided at `configs/settings/lqr_switched.yml`.
+
 
 ## Populating a config file
 

@@ -361,6 +361,17 @@ class Scenario():
         # Set seed
         np.random.seed(seed)
 
+        if (self.problem_params.get('simulator_type') == 'lqr_hybrid' and
+                'uniform_range' in store_params['initial_inventory']):
+            low, high = store_params['initial_inventory']['uniform_range']
+            inventory_periods = store_params['initial_inventory']['inventory_periods']
+            initial_inventory = torch.tensor(
+                np.random.uniform(low, high, size=(self.num_samples, problem_params['n_stores'], inventory_periods))
+            )
+            if store_params['initial_inventory'].get('scale_by_sqrt_dim', False):
+                scale = 1.0 / np.sqrt(problem_params['n_stores'])
+                initial_inventory = initial_inventory * scale
+            return initial_inventory
         if store_params['initial_inventory']['sample']:
             demand_mean = demands.float().mean(dim=2).mean(dim=0)
             demand_mults = np.random.uniform(*store_params['initial_inventory']['range_mult'], 

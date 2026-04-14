@@ -1,0 +1,17 @@
+# Fixed-mode LQR Riccati sweep configuration
+config_files:
+  hyperparams: 'configs/policies/fixed_mode_lqr_riccati.yml'
+
+method: 'grid'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  fixed_lqr_mode:
+    values:
+      - 0
+      - 1
+use_wandb:
+  values:
+    - true

@@ -1,0 +1,73 @@
+# Gaussian PPO Separate Net LQR Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/gaussian_ppo_separate_net_lqr.yml'
+
+method: 'grid'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  anneal_lr:
+    values:
+      - false
+  anneal_entropy_coef:
+    values:
+      - true
+  min_entropy_coef:
+    values:
+      - 0.001
+  entropy_coef:
+    values:
+      - 0.5
+  buffer_periods:
+    values:
+      - 0
+  clip_coef:
+    values:
+      - 0.15
+  gae_lambda:
+    values:
+      - 0.96
+  gamma:
+    values:
+      - 0.99
+  hidden_layers:
+    values:
+      - [512, 512]
+  learning_rate:
+    values:
+      - 0.001
+  max_grad_norm:
+    values:
+      - 5.0
+  normalize_advantages:
+    values:
+      - true
+  normalize_observations:
+    values:
+      - false
+  num_epochs:
+    values:
+      - 5
+  policy_activation:
+    values:
+      - Tanh
+  reward_scaling:
+    values:
+      - true
+  use_gae:
+    values:
+      - true
+  value_activation:
+    values:
+      - Tanh
+  value_function_coef:
+    values:
+      - 0.15
+  use_wandb:
+    values:
+      - true
+  continuous_shift:
+    values:
+      - 0.0

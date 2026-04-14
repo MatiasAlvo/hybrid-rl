@@ -45,8 +45,11 @@ class Logger:
         # Initialize W&B if enabled
         if self.use_wandb:
             try:
+                project_name = logging_params.get('wandb_project_name', 'inventory_control')
+                wandb_entity = logging_params.get('wandb_entity')
                 wandb.init(
-                    project="inventory_control",
+                    project=project_name,
+                    # entity=wandb_entity,  # we are not using entity for now (otherwise an error is raised)
                     config=config.get_complete_config(),
                     name=f"inventory__{setting_name}__{timestamp}",
                     group=setting_name,  # Use setting_name for grouping

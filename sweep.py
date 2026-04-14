@@ -9,6 +9,7 @@ import json
 import fcntl
 from typing import List, Optional
 from main_run import run_training
+from src.envs.inventory.lqr_matrix_store import prepare_lqr_matrices
 from src.utils.path_utils import get_date_folder
 
 # Only import ray if needed (for agent runs)
@@ -32,16 +33,59 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-def save_sweep_id(sweep_id, filename='sweep_id.txt'):
-    """Save sweep_id to a file"""
+def _default_wandb_project():
+    return os.environ.get("WANDB_PROJECT", "inventory_control")
+
+def _resolve_sweep_project(agent_sweep_file: str) -> str:
+    try:
+        with open(agent_sweep_file, 'r') as file:
+            agent_sweep_config = yaml.safe_load(file)
+        hyperparams_path = agent_sweep_config.get('config_files', {}).get('hyperparams')
+        if not hyperparams_path:
+            return _default_wandb_project()
+        with open(hyperparams_path, 'r') as file:
+            hyperparams_config = yaml.safe_load(file)
+        logging_params = hyperparams_config.get('logging_params', {})
+        return logging_params.get('wandb_project_name', _default_wandb_project())
+    except Exception:
+        return _default_wandb_project()
+
+def save_sweep_id(sweep_id, filename='sweep_id.txt', project=None):
+    """Save sweep_id (and optional project) to a file."""
+    payload = {"sweep_id": sweep_id}
+    if project:
+        payload["project"] = project
     with open(filename, 'w') as f:
-        f.write(sweep_id)
+        json.dump(payload, f)
 
 def load_sweep_id(filename='sweep_id.txt'):
-    """Load sweep_id from a file"""
-    if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            return f.read().strip()
+    """Load sweep_id from a file (supports legacy plain text)."""
+    if not os.path.exists(filename):
+        return None
+    with open(filename, 'r') as f:
+        content = f.read().strip()
+    if not content:
+        return None
+    try:
+        payload = json.loads(content)
+        return payload.get("sweep_id")
+    except json.JSONDecodeError:
+        return content
+
+def load_sweep_project(filename='sweep_id.txt'):
+    """Load sweep project from file if available."""
+    if not os.path.exists(filename):
+        return None
+    with open(filename, 'r') as f:
+        content = f.read().strip()
+    if not content:
+        return None
+    try:
+        payload = json.loads(content)
+        if isinstance(payload, dict):
+            return payload.get("project")
+    except json.JSONDecodeError:
+        return None
     return None
 
 def _load_top_k_metadata(metadata_path):
@@ -247,7 +291,7 @@ class TrainingWorker:
                 sweep_id,
                 function=lambda: train_sweep(wandb.config),  # Pass wandb.config explicitly
                 count=1,
-                project="inventory_control"
+                project=_default_wandb_project()
             )
             return True
             
@@ -260,7 +304,7 @@ def train_sweep(sweep_config):
     try:
         # Initialize wandb first
         run = wandb.init(
-            project="inventory_control",
+            project=_default_wandb_project(),
             config=sweep_config
         )
         
@@ -307,6 +351,7 @@ def train_sweep(sweep_config):
                 'temperature_decay': ('hyperparams', ['agent_params', 'temperature_decay']),
                 'use_straight_through': ('hyperparams', ['agent_params', 'use_straight_through']),
                 'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
+                'fixed_lqr_mode': ('hyperparams', ['agent_params', 'fixed_lqr_mode']),
                 # Add mapping for continuous scale parameter - updated path
                 'continuous_scale': ('hyperparams', ['nn_params', 'policy_network', 'continuous_scale']),
                 'continuous_shift': ('hyperparams', ['nn_params', 'policy_network', 'continuous_shift']),
@@ -325,6 +370,7 @@ def train_sweep(sweep_config):
                 'fixed_cost': ('setting', ['problem_params', 'discrete_features', 'fixed_ordering_cost', 'values', 1]),
                 'n_stores': ('setting', ['problem_params', 'n_stores']),
                 'stores': ('setting', ['problem_params', 'n_stores']),
+                'n_modes': ('setting', ['problem_params', 'n_modes']),
                 'sweep_top_k_split_by': ('hyperparams', ['trainer_params', 'sweep_top_k_split_by']),
                 'sweep_top_k_metric': ('hyperparams', ['trainer_params', 'sweep_top_k_metric']),
             }
@@ -481,8 +527,8 @@ def train_sweep(sweep_config):
                         if isinstance(value_network, dict):
                             value_network['hidden_layers'] = param_value
 
-            # Shift seeds and test_seeds by a_seed (if provided)
-            if 'a_seed' in run.config:
+            # Shift seeds and test_seeds by a_seed (opt-in)
+            if run.config.get('apply_seed_offset', False) and 'a_seed' in run.config:
                 seed_offset = run.config['a_seed']
                 _shift_seed_values(setting_config.get('seeds'), seed_offset, 'seeds')
                 _shift_seed_values(setting_config.get('test_seeds'), seed_offset, 'test_seeds')
@@ -564,6 +610,18 @@ def train_sweep(sweep_config):
                 'lost_demand' if problem_params.get('lost_demand', False) else 'backorder',
                 hyperparams_config['agent_params']['agent_type']
             ]
+
+            # Update project once config is available
+            logging_params = hyperparams_config.get('logging_params', {})
+            project_name = logging_params.get('wandb_project_name', _default_wandb_project())
+            if project_name != run.project:
+                try:
+                    run.project = project_name
+                except Exception:
+                    os.environ["WANDB_PROJECT"] = project_name
+
+            # Ensure LQR matrices are available before creating the simulator
+            prepare_lqr_matrices(setting_config.get('problem_params', {}))
 
             # Run training
             train_metrics, dev_metrics, test_metrics, best_performance = run_training(
@@ -705,12 +763,12 @@ if __name__ == "__main__":
     if args.create:
         # Create sweep config by merging agent and setting sweep configs
         sweep_config = create_sweep_config(args.agent_sweep, args.setting_sweep)
-        
+        project_name = _resolve_sweep_project(args.agent_sweep)
         sweep_id = wandb.sweep(
             sweep_config, 
-            project="inventory_control"
+            project=project_name
         )
-        save_sweep_id(sweep_id)
+        save_sweep_id(sweep_id, project=project_name)
         print(f"Created sweep with ID: {sweep_id}")
     
     if args.agent:
@@ -718,6 +776,9 @@ if __name__ == "__main__":
         sweep_id = load_sweep_id()
         if sweep_id is None:
             raise ValueError("No sweep ID found. Please create a sweep first using --create")
+        sweep_project = load_sweep_project()
+        if sweep_project:
+            os.environ["WANDB_PROJECT"] = sweep_project
             
         # Start timing
         start_time = time.time()
@@ -738,6 +799,11 @@ if __name__ == "__main__":
         logging.info(f"Available GPUs: {available_gpus}")
         
         # Initialize Ray with explicit GPU configuration
+        env_vars = {
+            "CUDA_VISIBLE_DEVICES": ",".join(map(str, available_gpus)),
+        }
+        if sweep_project:
+            env_vars["WANDB_PROJECT"] = sweep_project
         ray.init(
             num_cpus=len(available_gpus),
             num_gpus=len(available_gpus),
@@ -747,7 +813,7 @@ if __name__ == "__main__":
             _temp_dir=tempfile.mkdtemp(),
             runtime_env={
                 "env_vars": {
-                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, available_gpus)),
+                    **env_vars,
                     # "CUDA_LAUNCH_BLOCKING": "1",
                     # "TORCH_USE_CUDA_DSA": "1"
                 }

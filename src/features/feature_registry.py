@@ -422,7 +422,7 @@ class FeatureRegistry:
         
         return action_dict
     
-    def process_network_output(self, raw_outputs, argmax=False, sample=False, random_continuous=False, straight_through=False, discrete_probs=None, log_probs=None, observations=None):
+    def process_network_output(self, raw_outputs, argmax=False, sample=False, random_continuous=False, straight_through=False, discrete_probs=None, log_probs=None, observations=None, apply_scaling=True):
         """
         Process network outputs into action space - works for all agent types
         
@@ -489,15 +489,19 @@ class FeatureRegistry:
                 # Reshape continuous output from [batch, 1, n_stores * n_sub_ranges] to [batch, n_stores, n_sub_ranges]
                 raw_continuous_samples = self.reshape_continuous_output(raw_continuous_samples)
             
-            # Process the continuous values
-            continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
-            continuous_values = self._maybe_scale_activated_by_mean(continuous_values)
-            continuous_values = self.range_manager.scale_continuous_by_ranges(
-                continuous_values,
-                self.range_manager.get_continuous_ranges(),
-                observations=observations,
-                feature_registry=self
-            )
+            if apply_scaling:
+
+                # Process the continuous values
+                continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
+                continuous_values = self._maybe_scale_activated_by_mean(continuous_values)
+                continuous_values = self.range_manager.scale_continuous_by_ranges(
+                    continuous_values,
+                    self.range_manager.get_continuous_ranges(),
+                    observations=observations,
+                    feature_registry=self
+                )
+            else:
+                continuous_values = raw_continuous_samples
         
         # Combine discrete and continuous actions into feature-specific actions
         feature_actions = self.range_manager.compute_feature_actions(
@@ -513,15 +517,12 @@ class FeatureRegistry:
             'continuous_values': continuous_values,
             'feature_actions': feature_actions
         }
-        
-        # Include raw continuous samples when using random_continuous
-        if random_continuous and raw_continuous_samples is not None:
-            action_dict['raw_continuous_samples'] = raw_continuous_samples
+        action_dict['raw_continuous_samples'] = raw_continuous_samples
         
         return action_dict
     
     def process_continuous_output(self, raw_continuous, discrete_action_indices=None, continuous_mean=None, 
-                                 continuous_log_std=None, random_continuous=False, observations=None):
+                                 continuous_log_std=None, random_continuous=False, observations=None, apply_scaling=True):
         """
         Process network outputs for continuous actions.
         
@@ -576,15 +577,18 @@ class FeatureRegistry:
                 # Sum log probs across continuous dimensions (n_sub_ranges)
                 continuous_log_probs = selected_continuous_log_probs.sum(dim=-1)  # [batch]
         
-        # Process the continuous values through range scaling
-        continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
-        continuous_values = self._maybe_scale_activated_by_mean(continuous_values)
-        continuous_values = self.range_manager.scale_continuous_by_ranges(
-            continuous_values,
-            self.range_manager.get_continuous_ranges(),
-            observations=observations,
-            feature_registry=self
-        )
+        # Process the continuous values through range scaling (unless disabled)
+        if apply_scaling:
+            continuous_values = self.range_manager.apply_activations(raw_continuous_samples)
+            continuous_values = self._maybe_scale_activated_by_mean(continuous_values)
+            continuous_values = self.range_manager.scale_continuous_by_ranges(
+                continuous_values,
+                self.range_manager.get_continuous_ranges(),
+                observations=observations,
+                feature_registry=self
+            )
+        else:
+            continuous_values = raw_continuous_samples
         
         # Create result dictionary
         result = {

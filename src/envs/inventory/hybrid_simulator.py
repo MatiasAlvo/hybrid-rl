@@ -38,7 +38,9 @@ class HybridSimulator(Simulator):
         
         # Compute normalization stats if we have collected data
         if self.normalize_observations and len(self._inventory_observations) > 0:
+            # print('Computing normalization stats')
             self._compute_normalization_stats()
+            # print(f'Normalization stats: mean={self.inventory_mean}, std={self.inventory_std}')
         
         # Clear the observations list for next batch
         self._inventory_observations = []
@@ -425,10 +427,10 @@ class HybridSimulator(Simulator):
         normalized_observation = observation.copy()
         store_inventory = observation['store_inventories']
         
-        # Normalize inventory on hand
+        # Normalize inventory
         normalized_inventory = (store_inventory - self.inventory_mean) / self.inventory_std
         
-        # Update only the inventory on hand part
+        # Update only the inventory
         normalized_observation['store_inventories'] = normalized_inventory
         
         return normalized_observation

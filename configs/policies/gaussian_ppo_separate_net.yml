@@ -64,6 +64,7 @@ nn_params:
     hidden_layers: [256, 256]
     # activation: 'ELU'
     activation: 'Tanh'
+    init_discrete_uniform: true
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0
