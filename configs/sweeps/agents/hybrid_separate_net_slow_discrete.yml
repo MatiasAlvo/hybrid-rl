@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/alternate_hybrid.yml'
+  hyperparams: 'configs/policies/hybrid_separate_net_slow_discrete.yml'
 
 method: 'grid'
 metric:
@@ -25,7 +25,13 @@ parameters:
       - true
   entropy_coef:
     values:
-      - 0.3
+      - 0.5
+  anneal_entropy_coef:
+    values:
+      - true
+  min_entropy_coef:
+    values:
+      - 0.001
   fixed_cost:
     distribution: categorical
     values:
@@ -35,7 +41,7 @@ parameters:
       - 0.96
   gamma:
     values:
-      - 0.99
+      - 0.93
   hidden_layers:
     values:
       - [512, 512]
@@ -52,15 +58,10 @@ parameters:
     values:
       - false
   num_epochs:
-    values: [1]
-  loss_schedule_policy_value:
-    values: [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21]
-  loss_schedule_pathwise:
-    values: [1]
-    # values: [1, 3, 5, 7, 9]
+    values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
   pathwise_coef:
     values:
-      - 5.0
+      - 1.0
   policy_activation:
     values:
     - Tanh

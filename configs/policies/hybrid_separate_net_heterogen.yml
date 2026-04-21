@@ -21,9 +21,9 @@ logging_params:
   setting_name: one_store_fixed_costs
   # setting_name: one_store_multi_lead_time_lost
   # setting_name: fixed_costs_not_at_zero
-  log_inventory_action_plot: true
+  log_inventory_action_plot: false
   log_inventory_value_plot: false
-  log_inventory_discrete_action0_prob_plot: true
+  log_inventory_discrete_action0_prob_plot: false
   normalize_plots_by_mean_demand: false
 
 agent_params:

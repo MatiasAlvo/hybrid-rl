@@ -2,70 +2,61 @@
 config_files:
   hyperparams: 'configs/policies/hybrid_separate_net_heterogen.yml'
 
-method: 'grid'
+method: 'random'
 metric:
   name: 'dev/loss/best'
   goal: 'minimize'
 
 parameters:
-  add_gumbel_noise:
-    values:
-      - false
   anneal_lr:
     values:
-      - false
+      - false  # Fixed: 60% of top performers used false
   buffer_periods:
     values:
-      - 20
+      - 20  # Fixed: median of top performers
   clip_coef:
     values:
-      - 0.15
-  disable_cross_term:
-    values:
-      - true
-      - false
-  entropy_coef:
-    values:
-      - 0.5
-  anneal_entropy_coef:
-    values:
-      - true
-  min_entropy_coef:
-    values:
-      - 0.001
+      - 0.16  # Fixed: median of top performers
   gae_lambda:
     values:
-      - 0.96
+      - 0.98
   gamma:
     values:
+      - 0.995
       - 0.99
-  hidden_layers:
-    values:
-      - [512, 512]
+      - 0.93
   learning_rate:
-    values:
-      - 0.001
+    distribution: log_uniform_values
+    max: 0.01
+    min: 0.0008
   max_grad_norm:
     values:
-      - 5.0
+      - 5.0  # Fixed: median of top performers
   normalize_advantages:
     values:
       - true
   normalize_observations:
     values:
       - false
+  normalize_by_mean_demand:
+    values:
+      - true
+      - false
   num_epochs:
     values:
-      - 5
-  trainer_epochs:
+      - 3
+      - 1
+  disable_cross_term:
     values:
-      - 800
+      - true
+      - false
   pathwise_coef:
-    values:
-      - 1.0
+    distribution: uniform
+    max: 5.0
+    min: 1.0
   policy_activation:
     values:
-    - Tanh
+      - Tanh  # Fixed: 90% of top performers used Tanh
   reward_scaling:
     values:
       - true
@@ -80,19 +71,13 @@ parameters:
       - Tanh
   value_function_coef:
     values:
-      - 0.15
+      - 0.13  # Fixed: median of top performers
   continuous_scale:
     values:
       - 1.0
   continuous_shift:
     values: 
-      - 1.0
-  normalize_by_mean_demand:
-    values:
-      - true
+      - 5.0  # Fixed: median of top performers (changed from 1.0 to 1)
   use_wandb:
     values:
       - true
-  sweep_top_k_split_by:
-    values:
-      - "n_stores"

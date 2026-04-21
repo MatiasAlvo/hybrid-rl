@@ -3,9 +3,9 @@ config_files:
   setting: 'configs/settings/fixed_costs.yml'
 
 parameters:
-  normalize_observations:
-    values: [False]
   fixed_cost:
     values: [64]
   a_seed:
     values: [0, 1, 2, 3, 4]
+  batch_size:
+    values: [1024]

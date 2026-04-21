@@ -1,5 +1,5 @@
 trainer_params:
-  epochs: 500
+  epochs: 100
   do_dev_every_n_epochs: 1
   print_results_every_n_epochs: 1
   save_model: false
@@ -39,7 +39,7 @@ optimizer_params:
   learning_rate: 0.003  # Overridden by sweep config
   anneal_lr: false  # Overridden by sweep config
   weight_decay: 0.0
-  # skip_update_every_n_epochs: 1
+  skip_update_every_n_epochs: 2
   lr_multipliers:
     value: 1.0
     backbone: 1.0
@@ -52,7 +52,7 @@ optimizer_params:
     gae_lambda: 0.96  # Overridden by sweep config
     normalize_advantages: true  # Overridden by sweep config
     use_gae: true  # Overridden by sweep config
-    num_epochs: 1  # Overridden by sweep config
+    num_epochs: 5  # Overridden by sweep config
     num_minibatches: 1  # Overridden by sweep config
     value_function_coef: 0.13  # Overridden by sweep config
     pathwise_coef: 1.0  # Overridden by sweep config
@@ -60,20 +60,16 @@ optimizer_params:
     reward_scaling: true  # Overridden by sweep config
     buffer_periods: 20  # Overridden by sweep config
     max_grad_norm: 5.0  # Overridden by sweep config
-    entropy_coef: 0.1
+    entropy_coef: 0.0
     anneal_entropy_coef: false
     min_entropy_coef: 0.0
     clip_by_component: true
     disable_cross_term: true
     grad_analysis: false
-    cosine_grad_analysis: false
-    take_gradient_step_during_cosine_analysis: true
-    # alignment_ds: [128, 256]
-    # alignment_repeats: 100
-    # use_reinforce_loss: true
-    loss_schedule:
-      policy_value: 1
-      pathwise: 5
+    cosine_grad_analysis: true
+    alignment_ds: [128, 256]
+    alignment_repeats: 100
+    use_reinforce_loss: true
 
 nn_params:
   policy_network:
@@ -107,4 +103,3 @@ nn_params:
     dropout: 0.0
     batch_norm: false
     output_size: 1
-

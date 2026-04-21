@@ -81,6 +81,9 @@ def scale_fixed_cost_by_stores(setting_config):
         .get('discrete_features', {})
         .get('fixed_ordering_cost', {})
     )
+    if not fixed_cost_config.get('scale_by_n_stores', True):
+        print("Skipping fixed_ordering_cost scaling by n_stores (scale_by_n_stores=false).")
+        return
     if fixed_cost_config.get('_scaled_by_n_stores'):
         return
     values = fixed_cost_config.get('values')

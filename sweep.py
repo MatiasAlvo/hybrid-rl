@@ -343,6 +343,7 @@ def train_sweep(sweep_config):
                 'entropy_coef_scale_log_n_stores': ('hyperparams', ['optimizer_params', 'ppo_params', 'entropy_coef_scale_log_n_stores']),
                 'anneal_entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'anneal_entropy_coef']),
                 'min_entropy_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'min_entropy_coef']),
+                'loss_schedule_policy_value': ('hyperparams', ['optimizer_params', 'ppo_params', 'loss_schedule', 'policy_value']),
                 'loss_schedule_pathwise': ('hyperparams', ['optimizer_params', 'ppo_params', 'loss_schedule', 'pathwise']),
                 'disable_cross_term': ('hyperparams', ['optimizer_params', 'ppo_params', 'disable_cross_term']),
                 # Unified temperature parameters
@@ -541,6 +542,65 @@ def train_sweep(sweep_config):
                     if isinstance(split_params, dict):
                         split_params['batch_size'] = run.config['batch_size']
 
+            # Pair override for batch size and trainer epochs.
+            # This has precedence over separate batch_size/trainer_epochs sweep values.
+            if 'batch_trainer_pair' in run.config:
+                pair_value = run.config['batch_trainer_pair']
+                parsed_batch_size = None
+                parsed_trainer_epochs = None
+
+                if isinstance(pair_value, (list, tuple)) and len(pair_value) == 2:
+                    parsed_batch_size, parsed_trainer_epochs = pair_value
+                elif isinstance(pair_value, dict):
+                    parsed_batch_size = pair_value.get('batch_size')
+                    parsed_trainer_epochs = pair_value.get('trainer_epochs', pair_value.get('epochs'))
+                elif isinstance(pair_value, str):
+                    normalized = pair_value.replace(" ", "")
+                    for separator in (",", ":", "|", "/"):
+                        if separator in normalized:
+                            left, right = normalized.split(separator, 1)
+                            parsed_batch_size = left
+                            parsed_trainer_epochs = right
+                            break
+                    if parsed_batch_size is None or parsed_trainer_epochs is None:
+                        raise ValueError(
+                            "batch_trainer_pair string must be in the form "
+                            "'<batch_size>,<trainer_epochs>' (or ':' / '|' / '/'). "
+                            f"Got: {pair_value!r}"
+                        )
+                else:
+                    raise ValueError(
+                        "batch_trainer_pair must be [batch_size, trainer_epochs], "
+                        "{batch_size: ..., trainer_epochs: ...}, or '<batch_size>,<trainer_epochs>'. "
+                        f"Got: {pair_value!r}"
+                    )
+
+                try:
+                    parsed_batch_size = int(parsed_batch_size)
+                    parsed_trainer_epochs = int(parsed_trainer_epochs)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Invalid batch_trainer_pair values: {pair_value!r}. "
+                        "Both must be integers."
+                    ) from exc
+
+                if parsed_batch_size <= 0 or parsed_trainer_epochs <= 0:
+                    raise ValueError(
+                        f"batch_trainer_pair values must be > 0, got {pair_value!r}"
+                    )
+
+                params_by_dataset = setting_config.get('params_by_dataset', {})
+                for split_name in ('train', 'dev', 'test'):
+                    split_params = params_by_dataset.get(split_name)
+                    if isinstance(split_params, dict):
+                        split_params['batch_size'] = parsed_batch_size
+                hyperparams_config.setdefault('trainer_params', {})['epochs'] = parsed_trainer_epochs
+
+                print(
+                    f"Applied batch_trainer_pair={pair_value!r}: "
+                    f"batch_size={parsed_batch_size}, trainer_epochs={parsed_trainer_epochs}"
+                )
+
             # Apply a shared perturbation after explicit overrides
             _apply_degradation_scale(
                 hyperparams_config,
@@ -581,7 +641,9 @@ def train_sweep(sweep_config):
                 .get('discrete_features', {})
                 .get('fixed_ordering_cost', {})
             )
-            if fixed_cost_config.get('_scaled_by_n_stores'):
+            if not fixed_cost_config.get('scale_by_n_stores', True):
+                print("Skipping fixed_ordering_cost scaling by n_stores (scale_by_n_stores=false).")
+            elif fixed_cost_config.get('_scaled_by_n_stores'):
                 print("Fixed ordering cost already scaled by n_stores; skipping.")
             else:
                 values = fixed_cost_config.get('values')

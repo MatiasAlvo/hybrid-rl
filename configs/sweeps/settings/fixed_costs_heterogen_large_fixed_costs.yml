@@ -14,6 +14,6 @@ parameters:
   batch_size:
     values: [128, 64]
   a_seed:
-    values: [0, 1, 2, 3, 4]
+    values: [5, 6, 7, 8, 9, 10, 11]
   fixed_cost:
     values: [320]

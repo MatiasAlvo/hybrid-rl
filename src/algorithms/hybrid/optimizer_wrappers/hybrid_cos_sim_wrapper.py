@@ -40,6 +40,12 @@ class HybridCosSimWrapper(HybridWrapper):
             (name, param) for name, param in self.model.named_parameters()
             if 'continuous' in name
         ]
+        # By default, cosine shadow-analysis epochs do not update parameters.
+        # Set this flag to True to still run optimizer steps while collecting
+        # cosine metrics during skip_update epochs.
+        self.take_gradient_step_during_cosine_analysis = bool(
+            self.ppo_params.get('take_gradient_step_during_cosine_analysis', False)
+        )
     
     def on_epoch_start(self):
         super().on_epoch_start()
@@ -77,7 +83,18 @@ class HybridCosSimWrapper(HybridWrapper):
         if not (self.cosine_grad_analysis and self.skip_update):
             return super().optimize(trajectory_data)
         self._collect_shadow_gradients(trajectory_data)
-        return {}
+
+        if not self.take_gradient_step_during_cosine_analysis:
+            return {}
+
+        # Force updates for this call while preserving the outer epoch
+        # skip_update state used by scheduling/analysis.
+        previous_skip_update = self.skip_update
+        try:
+            self.skip_update = False
+            return super().optimize(trajectory_data)
+        finally:
+            self.skip_update = previous_skip_update
     
     def _collect_shadow_gradients(self, trajectory_data):
         # Move to device once
@@ -100,13 +117,15 @@ class HybridCosSimWrapper(HybridWrapper):
             # Prepare data
             processed_data = self._prepare_trajectory_data(trajectory_data)
             advantages, returns, cum_rewards = self.compute_advantages(trajectory_data)
+
+            # Build tensors while forced required_losses are active so
+            # discrete_action_indices/log_probs are available even if the
+            # scheduled phase is pathwise-only.
+            tensors = self._prepare_training_tensors(
+                trajectory_data, advantages, returns, cum_rewards, processed_data
+            )
         finally:
             self.required_losses = saved_required_losses
-        
-        # Use training tensors (full batch)
-        tensors = self._prepare_training_tensors(
-            trajectory_data, advantages, returns, cum_rewards, processed_data
-        )
         
         batch_size = tensors['observations'].shape[0]
         mb_inds = torch.arange(batch_size, device=self.device)
@@ -161,6 +180,10 @@ class HybridCosSimWrapper(HybridWrapper):
     def _compute_policy_loss(self, mb_data, processed_data, detach_obs=False, detach_continuous_log_probs=False):
         observations = mb_data['observations'].detach() if detach_obs else mb_data['observations']
         discrete_action_indices = mb_data.get('discrete_action_indices')
+        if discrete_action_indices is None:
+            return torch.tensor(0.0, device=self.device)
+        if mb_data.get('log_probs') is None:
+            return torch.tensor(0.0, device=self.device)
         continuous_samples = mb_data.get('raw_continuous_samples')
         new_log_probs_full, _, _ = self.model.get_log_probs_value_and_entropy(
             observations,
@@ -254,6 +277,10 @@ class HybridCosSimWrapper(HybridWrapper):
             return torch.tensor(0.0, device=self.device)
         observations = mb_data['observations'].detach() if detach_obs else mb_data['observations']
         discrete_action_indices = mb_data.get('discrete_action_indices')
+        if discrete_action_indices is None:
+            return torch.tensor(0.0, device=self.device)
+        if mb_data.get('log_probs') is None:
+            return torch.tensor(0.0, device=self.device)
         continuous_samples = mb_data.get('raw_continuous_samples')
         new_log_probs_full, _, _ = self.model.get_log_probs_value_and_entropy(
             observations,
