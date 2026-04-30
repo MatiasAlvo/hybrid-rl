@@ -1,6 +1,6 @@
 # Hybrid Agent Sweep Configuration
 config_files:
-  hyperparams: 'configs/policies/hybrid_separate_net_heterogen.yml'
+  hyperparams: 'configs/policies/hybrid_cos_sim_joint_heterogen.yml'
 
 method: 'grid'
 metric:
@@ -62,7 +62,7 @@ parameters:
       - 5
   pathwise_coef:
     values:
-      - 5.0
+      - 1.0
   policy_activation:
     values:
     - Tanh
@@ -76,7 +76,7 @@ parameters:
     values:
       - true
   value_activation:
-    values: 
+    values:
       - Tanh
   value_function_coef:
     values:
@@ -85,7 +85,7 @@ parameters:
     values:
       - 1.0
   continuous_shift:
-    values: 
+    values:
       - 1.0
   normalize_by_mean_demand:
     values:
@@ -96,3 +96,5 @@ parameters:
   sweep_top_k_split_by:
     values:
       - "n_stores"
+  a_seed:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

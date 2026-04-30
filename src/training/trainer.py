@@ -150,7 +150,16 @@ class Trainer():
                             dev_metrics['trajectory_data'], 
                             epoch, 
                             dev_loss=dev_metrics['loss/reported'],
-                            normalize_by_mean_demand=normalize_by_mean
+                            normalize_by_mean_demand=normalize_by_mean,
+                            dump_plot_data=logging_params.get('dump_inventory_action_plot_data', False),
+                            dump_plot_data_only=logging_params.get('inventory_action_plot_dump_only', False),
+                            dump_plot_data_per_epoch=logging_params.get('inventory_action_plot_dump_per_epoch', True),
+                            dump_plot_data_single_file=logging_params.get('inventory_action_plot_dump_single_file', False),
+                            dump_plot_data_dir=logging_params.get(
+                                'inventory_action_plot_dump_dir',
+                                'artifacts/inventory_action_plot_data'
+                            ),
+                            exp_name=logging_params.get('exp_name', 'default_exp')
                         )
                     
                     # Generate and log inventory vs value plot for dev set with dev loss
@@ -168,7 +177,15 @@ class Trainer():
                             dev_metrics['trajectory_data'], 
                             epoch, 
                             dev_loss=dev_metrics['loss/reported'],
-                            normalize_by_mean_demand=normalize_by_mean
+                            normalize_by_mean_demand=normalize_by_mean,
+                            dump_plot_data=logging_params.get('dump_inventory_discrete_action0_prob_plot_data', False),
+                            dump_plot_data_only=logging_params.get('inventory_discrete_action0_prob_plot_dump_only', False),
+                            dump_plot_data_dir=logging_params.get(
+                                'inventory_discrete_action0_prob_plot_dump_dir',
+                                'artifacts/inventory_discrete_action0_prob_plot_data'
+                            ),
+                            run_name=logging_params.get('inventory_discrete_action0_prob_plot_run_name', None),
+                            exp_name=logging_params.get('exp_name', 'default_exp')
                         )
                     
                     # Generate and log inventory ordering heatmap (if enabled in config)
@@ -922,7 +939,19 @@ class Trainer():
         df.to_csv(csv_path, index=False)
         print(f"Saved test data to {csv_path}")
 
-    def log_inventory_action_plot(self, trajectory_data, epoch, dev_loss=None, normalize_by_mean_demand=False):
+    def log_inventory_action_plot(
+        self,
+        trajectory_data,
+        epoch,
+        dev_loss=None,
+        normalize_by_mean_demand=False,
+        dump_plot_data=False,
+        dump_plot_data_only=False,
+        dump_plot_data_per_epoch=True,
+        dump_plot_data_single_file=False,
+        dump_plot_data_dir='artifacts/inventory_action_plot_data',
+        exp_name='default_exp'
+    ):
         """
         Generate and log a plot showing the relationship between inventory and actions to wandb.
         
@@ -933,8 +962,9 @@ class Trainer():
             normalize_by_mean_demand: Whether to normalize quantities by mean demand
         """
         try:
-            # Skip if logger is not available
-            if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
+            # Skip only when neither wandb logging nor data dumping is requested
+            can_log_to_wandb = self.logger is not None and hasattr(self.logger, 'use_wandb') and self.logger.use_wandb
+            if not can_log_to_wandb and not dump_plot_data:
                 return
             
             # Check if we have the necessary data - use store_inventories instead of observations
@@ -1016,6 +1046,105 @@ class Trainer():
                 # Normalize inventory and actions
                 inventory_sum = inventory_sum / (mean_demands_flat + 1e-8)
                 total_action = total_action / (mean_demands_flat + 1e-8)
+
+            # Optional one-off dump for offline plotting/debugging.
+            if dump_plot_data:
+                output_dir = os.path.join(dump_plot_data_dir, exp_name)
+                os.makedirs(output_dir, exist_ok=True)
+
+                if dump_plot_data_per_epoch:
+                    file_path = os.path.join(
+                        output_dir,
+                        f"inventory_action_epoch_{epoch:04d}_ts_{self.time_stamp}.npz"
+                    )
+                    dump_payload = {
+                        'inventory_sum': inventory_sum,
+                        'total_action': total_action,
+                        'epoch': np.array([epoch]),
+                        'normalize_by_mean_demand': np.array([int(normalize_by_mean_demand)]),
+                    }
+                    if has_discrete_actions:
+                        dump_payload['discrete_actions'] = discrete_actions_flat
+                    if dev_loss is not None:
+                        dump_payload['dev_loss'] = np.array([float(dev_loss)])
+                    np.savez_compressed(file_path, **dump_payload)
+
+                if dump_plot_data_single_file:
+                    aggregate_file_path = os.path.join(
+                        output_dir,
+                        f"inventory_action_all_epochs_ts_{self.time_stamp}.npz"
+                    )
+
+                    current_inventory = np.asarray(inventory_sum, dtype=np.float32).reshape(1, -1)
+                    current_action = np.asarray(total_action, dtype=np.float32).reshape(1, -1)
+                    if has_discrete_actions:
+                        current_discrete = np.asarray(discrete_actions_flat, dtype=np.float32).reshape(1, -1)
+                    else:
+                        current_discrete = np.full_like(current_inventory, np.nan, dtype=np.float32)
+                    current_num_points = np.array([current_inventory.shape[1]], dtype=np.int32)
+                    current_epoch = np.array([epoch], dtype=np.int32)
+                    current_dev_loss = np.array(
+                        [float(dev_loss) if dev_loss is not None else np.nan],
+                        dtype=np.float32
+                    )
+                    current_normalized = np.array([int(normalize_by_mean_demand)], dtype=np.int32)
+
+                    if os.path.exists(aggregate_file_path):
+                        with np.load(aggregate_file_path) as existing:
+                            inv_existing = existing['inventory_sum_by_epoch']
+                            act_existing = existing['total_action_by_epoch']
+                            disc_existing = existing['discrete_actions_by_epoch']
+                            epoch_existing = existing['epoch_by_row']
+                            points_existing = existing['num_points_by_epoch']
+                            dev_loss_existing = existing['dev_loss_reported_by_epoch']
+                            normalized_existing = existing['normalize_by_mean_demand_by_epoch']
+                    else:
+                        inv_existing = np.empty((0, 0), dtype=np.float32)
+                        act_existing = np.empty((0, 0), dtype=np.float32)
+                        disc_existing = np.empty((0, 0), dtype=np.float32)
+                        epoch_existing = np.empty((0,), dtype=np.int32)
+                        points_existing = np.empty((0,), dtype=np.int32)
+                        dev_loss_existing = np.empty((0,), dtype=np.float32)
+                        normalized_existing = np.empty((0,), dtype=np.int32)
+
+                    max_points = max(
+                        inv_existing.shape[1] if inv_existing.ndim == 2 and inv_existing.size > 0 else 0,
+                        current_inventory.shape[1]
+                    )
+
+                    def _pad_to_width(array_2d, width):
+                        if array_2d.size == 0:
+                            return np.full((0, width), np.nan, dtype=np.float32)
+                        if array_2d.shape[1] == width:
+                            return array_2d
+                        pad_width = width - array_2d.shape[1]
+                        return np.pad(
+                            array_2d,
+                            ((0, 0), (0, pad_width)),
+                            mode='constant',
+                            constant_values=np.nan
+                        )
+
+                    inv_existing = _pad_to_width(inv_existing, max_points)
+                    act_existing = _pad_to_width(act_existing, max_points)
+                    disc_existing = _pad_to_width(disc_existing, max_points)
+                    current_inventory = _pad_to_width(current_inventory, max_points)
+                    current_action = _pad_to_width(current_action, max_points)
+                    current_discrete = _pad_to_width(current_discrete, max_points)
+
+                    np.savez_compressed(
+                        aggregate_file_path,
+                        inventory_sum_by_epoch=np.vstack([inv_existing, current_inventory]),
+                        total_action_by_epoch=np.vstack([act_existing, current_action]),
+                        discrete_actions_by_epoch=np.vstack([disc_existing, current_discrete]),
+                        epoch_by_row=np.concatenate([epoch_existing, current_epoch]),
+                        num_points_by_epoch=np.concatenate([points_existing, current_num_points]),
+                        dev_loss_reported_by_epoch=np.concatenate([dev_loss_existing, current_dev_loss]),
+                        normalize_by_mean_demand_by_epoch=np.concatenate([normalized_existing, current_normalized]),
+                    )
+
+            if dump_plot_data_only:
+                return
             
             # Create the plot
             plt.figure(figsize=(16, 10))
@@ -1077,7 +1206,8 @@ class Trainer():
             buf.seek(0)
             img = Image.open(buf)
             
-            self.logger.current_metrics['inventory_action_plot'] = wandb.Image(img)
+            if can_log_to_wandb:
+                self.logger.current_metrics['inventory_action_plot'] = wandb.Image(img)
             plt.close()
             
         except Exception as e:
@@ -1251,7 +1381,18 @@ class Trainer():
         except Exception as e:
             print(f"Error generating inventory-value plot: {e}")
 
-    def log_inventory_discrete_action0_prob_plot(self, trajectory_data, epoch, dev_loss=None, normalize_by_mean_demand=False):
+    def log_inventory_discrete_action0_prob_plot(
+        self,
+        trajectory_data,
+        epoch,
+        dev_loss=None,
+        normalize_by_mean_demand=False,
+        dump_plot_data=False,
+        dump_plot_data_only=False,
+        dump_plot_data_dir='artifacts/inventory_discrete_action0_prob_plot_data',
+        run_name=None,
+        exp_name='default_exp'
+    ):
         """
         Generate and log a plot showing the relationship between inventory and probability of discrete action 0.
         
@@ -1262,7 +1403,8 @@ class Trainer():
             normalize_by_mean_demand: Whether to normalize quantities by mean demand
         """
         try:
-            if self.logger is None or not hasattr(self.logger, 'use_wandb') or not self.logger.use_wandb:
+            can_log_to_wandb = self.logger is not None and hasattr(self.logger, 'use_wandb') and self.logger.use_wandb
+            if not can_log_to_wandb and not dump_plot_data:
                 return
             
             # Check if we have the necessary data - use store_inventories instead of observations
@@ -1338,6 +1480,30 @@ class Trainer():
             # Compute probabilities from logits
             discrete_probs = torch.softmax(discrete_logits_flat, dim=-1)
             action0_probs = discrete_probs[:, 0].numpy()
+
+            # Optional one-off dump for offline plotting/debugging.
+            if dump_plot_data:
+                resolved_run_name = run_name if run_name else f"run_{self.time_stamp}"
+                safe_run_name = str(resolved_run_name).replace('/', '_').replace(' ', '_')
+                output_dir = os.path.join(dump_plot_data_dir, exp_name, safe_run_name)
+                os.makedirs(output_dir, exist_ok=True)
+                file_path = os.path.join(
+                    output_dir,
+                    f"inventory_discrete_action0_prob_epoch_{epoch:04d}_ts_{self.time_stamp}.npz"
+                )
+                dump_payload = {
+                    'inventory_sum': inventory_sum,
+                    'action0_prob': action0_probs,
+                    'epoch': np.array([epoch]),
+                    'normalize_by_mean_demand': np.array([int(normalize_by_mean_demand)]),
+                }
+                if dev_loss is not None:
+                    dump_payload['dev_loss_reported'] = np.array([float(dev_loss)])
+                dump_payload['run_name'] = np.array([safe_run_name])
+                np.savez_compressed(file_path, **dump_payload)
+
+            if dump_plot_data_only:
+                return
             
             # Create the plot
             plt.figure(figsize=(16, 10))
@@ -1367,7 +1533,8 @@ class Trainer():
             buf.seek(0)
             img = Image.open(buf)
             
-            self.logger.current_metrics['inventory_discrete_action0_prob_plot'] = wandb.Image(img)
+            if can_log_to_wandb:
+                self.logger.current_metrics['inventory_discrete_action0_prob_plot'] = wandb.Image(img)
             plt.close()
             
         except Exception as e:

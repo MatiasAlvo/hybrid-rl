@@ -45,3 +45,6 @@ Thumbs.db
 
 # Models
 models/saved_models/
+
+Figures/
+artifacts/

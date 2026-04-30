@@ -1,0 +1,16 @@
+# Fixed Costs Grid Search Sweep Configuration
+config_files:
+  setting: 'configs/settings/fixed_costs_heterogen.yml'
+
+method: 'grid'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  stores:
+    values: [50, 1, 40, 3, 30, 5, 20, 7, 15, 10]
+  a_seed:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  fixed_cost:
+    values: [64]
