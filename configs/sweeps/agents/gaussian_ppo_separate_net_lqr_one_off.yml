@@ -1,0 +1,72 @@
+# Gaussian PPO Separate Net LQR Agent Sweep Configuration
+config_files:
+  hyperparams: 'configs/policies/gaussian_ppo_separate_net_lqr.yml'
+
+method: 'grid'
+metric:
+  name: 'dev/loss/best'
+  goal: 'minimize'
+
+parameters:
+  anneal_lr:
+    values:
+      - false
+  anneal_entropy_coef:
+    values:
+      - true
+  min_entropy_coef:
+    values:
+      - 0.001
+  buffer_periods:
+    values:
+      - 0
+  discrete_only_extra_epochs:
+    values:
+      - false
+  gae_lambda:
+    values:
+      - 0.96
+  gamma:
+    values:
+      - 0.99
+  hidden_layers:
+    values:
+      - [512, 512]
+  max_grad_norm:
+    values:
+      - 5.0
+  normalize_advantages:
+    values:
+      - true
+  policy_activation:
+    values:
+      - Tanh
+  use_gae:
+    values:
+      - true
+  one_off_hparam_tuple:
+    values:
+      # (entropy_coef, learning_rate, normalize_observations, reward_scaling, fixed_std, num_epochs, value_function_coef, clip_coef, discrete_only_extra_epochs)
+      - [0.5, 0.0001, false, true, true, 5, 0.15, 0.15, true]     # discrete_only_extra_epochs=true @ base lr
+      - [0.5, 0.001, false, true, true, 5, 0.15, 0.15, true]      # discrete_only_extra_epochs=true @ large lr
+      # - [0.5, 0.0001, false, true, true, 5, 0.15, 0.15, false]    # base
+      # - [0.0, 0.0001, false, true, true, 5, 0.15, 0.15, false]    # entropy_coef=0
+      # - [0.01, 0.0001, false, true, true, 5, 0.15, 0.15, false]   # entropy_coef=0.01
+      # - [0.5, 0.00003, false, true, true, 5, 0.15, 0.15, false]   # learning_rate=0.00003 (smaller)
+      # - [0.5, 0.001, false, true, true, 5, 0.15, 0.15, false]     # learning_rate=0.001 (larger)
+      # - [0.5, 0.0001, true, true, true, 5, 0.15, 0.15, false]     # normalize_observations=true
+      # - [0.5, 0.0001, false, true, true, 1, 0.15, 0.15, false]    # num_epochs=1
+      # - [0.5, 0.0001, false, true, true, 10, 0.15, 0.15, false]   # num_epochs=10
+      # - [0.5, 0.0001, false, false, true, 5, 0.15, 0.15, false]   # reward_scaling=false
+      # - [0.5, 0.0001, false, true, false, 5, 0.15, 0.15, false]   # fixed_std=false
+      # - [0.5, 0.0001, false, true, true, 5, 0.5, 0.15, false]     # value_function_coef=0.5
+      # - [0.5, 0.0001, false, true, true, 5, 0.15, 0.2, false]     # clip_coef=0.2
+  value_activation:
+    values:
+      - Tanh
+  use_wandb:
+    values:
+      - true
+  continuous_shift:
+    values:
+      - 0.0

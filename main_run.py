@@ -35,7 +35,8 @@ from src.algorithms.hybrid.agents.hybrid_agent import (
     AlternateHybridAgent,
     VarianceScalingAgent,
     SwitchedLqrPolicyAgent,
-    FixedModeLqrRiccatiAgent
+    FixedModeLqrRiccatiAgent,
+    LearnedCriticPathwiseAgent
 )
 from src.algorithms.hybrid.agents.hybrid_cos_sim_agent import HybridCosSimAgent
 
@@ -49,6 +50,7 @@ from src.training.trainer import Trainer
 from src.features.feature_registry import FeatureRegistry
 from src.algorithms.hybrid.optimizer_wrappers.hybrid_wrapper import HybridWrapper
 from src.algorithms.hybrid.optimizer_wrappers.hybrid_cos_sim_wrapper import HybridCosSimWrapper
+from src.algorithms.hybrid.optimizer_wrappers.learned_critic_wrapper import LearnedCriticWrapper
 
 from src.utils.config import Config
 
@@ -394,7 +396,8 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         'optimal_multi_item': OptimalMultiItem,
         'alternate_hybrid': AlternateHybridAgent,
         'variance_scaling': VarianceScalingAgent,
-        'hybrid_cos_sim': HybridCosSimAgent
+        'hybrid_cos_sim': HybridCosSimAgent,
+        'learned_critic_pathwise': LearnedCriticPathwiseAgent
     }
 
     # Get agent type from config, default to 'hybrid' if not specified
@@ -454,7 +457,9 @@ def run_training(setting_config, hyperparams_config, mode='both', return_best_st
         'lr_multipliers': lr_multipliers
     }
 
-    if optimizer_params.get('ppo_params', {}).get('cosine_grad_analysis', False):
+    if agent_type == 'learned_critic_pathwise':
+        optimizer_wrapper = LearnedCriticWrapper(model, optimizer, problem_params, device=device, **wrapper_params)
+    elif optimizer_params.get('ppo_params', {}).get('cosine_grad_analysis', False):
         optimizer_wrapper = HybridCosSimWrapper(model, optimizer, problem_params, device=device, **wrapper_params)
     else:
         optimizer_wrapper = HybridWrapper(model, optimizer, problem_params, device=device, **wrapper_params)

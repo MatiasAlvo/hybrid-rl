@@ -474,10 +474,27 @@ class Trainer():
             # Execute environment step
             next_observation, reward, terminated, _, _ = simulator.step(observation, action_dict)
             total_reward = loss_function(None, action_dict, reward)
+            next_vectorized_obs = None
+            if vectorized_obs is not None:
+                if hasattr(model, 'feature_registry') and model.feature_registry is not None:
+                    next_obs_with_internal = self._prepare_observation_with_internal_data(next_observation, simulator)
+                    next_vectorized_obs = model.feature_registry.prepare_inputs(next_obs_with_internal, update_ewma=False)
+                else:
+                    next_vectorized_obs = self.vectorize_observation(next_observation, observation_keys, model)
 
             # Collect trajectory data if requested
             if collect_trajectories:
-                self._collect_trajectory_data(trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs, observation=observation)  # Pass observation
+                self._collect_trajectory_data(
+                    trajectory_data,
+                    vectorized_obs,
+                    action_dict,
+                    value,
+                    reward,
+                    terminated,
+                    raw_outputs,
+                    observation=observation,
+                    next_vectorized_obs=next_vectorized_obs
+                )  # Pass observation
 
             # Update running rewards
             batch_reward += total_reward
@@ -490,11 +507,21 @@ class Trainer():
             if terminated:
                 break
 
+        # Add final observation to trajectory data
+        if collect_trajectories and trajectory_data is not None:
+            if trajectory_data.get('next_observations') is not None and len(trajectory_data.get('observations', [])) > 0:
+                if hasattr(model, 'feature_registry') and model.feature_registry is not None:
+                    final_obs_with_internal = self._prepare_observation_with_internal_data(observation, simulator)
+                    final_next_vec = model.feature_registry.prepare_inputs(final_obs_with_internal, update_ewma=False)
+                else:
+                    final_next_vec = self.vectorize_observation(observation, observation_keys, model)
+                trajectory_data['next_observations'].append(final_next_vec.clone())
+
         # Process collected data
         trajectory_data = self._process_trajectory_data(trajectory_data, collect_trajectories)
         additional_data = self._process_additional_data(additional_data, collect_additional_data)
-        
-        # Add final observation to trajectory data
+
+        # Keep final observation in original dict form for existing advantage bootstrap code.
         if collect_trajectories and trajectory_data is not None:
             trajectory_data['next_observation'] = observation
 
@@ -534,6 +561,7 @@ class Trainer():
         
         return {
             'observations': [],  # Keep this for backward compatibility
+            'next_observations': [],
             'store_inventories': [],  # NEW: Store raw inventory data
             'discrete_action_indices': [],
             'discrete_logits': [],
@@ -580,9 +608,11 @@ class Trainer():
         """Apply discrete allocation by rounding action values"""
         return {key: val.round() for key, val in action_dict.items()}
 
-    def _collect_trajectory_data(self, trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs=None, observation=None):
+    def _collect_trajectory_data(self, trajectory_data, vectorized_obs, action_dict, value, reward, terminated, raw_outputs=None, observation=None, next_vectorized_obs=None):
         """Collect trajectory data for the current step"""
         if vectorized_obs is not None:
+            if next_vectorized_obs is not None and len(trajectory_data['observations']) > 0:
+                trajectory_data['next_observations'].append(vectorized_obs.clone())
             trajectory_data['observations'].append(vectorized_obs.clone())
         
         # NEW: Store raw, unnormalized inventory data

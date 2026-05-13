@@ -23,6 +23,7 @@ parameters:
   disable_cross_term:
     values:
       - false
+      - true
   entropy_coef:
     values:
       - 0.5

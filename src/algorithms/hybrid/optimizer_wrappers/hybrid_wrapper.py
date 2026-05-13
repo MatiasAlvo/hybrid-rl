@@ -804,6 +804,9 @@ class HybridWrapper(BaseOptimizerWrapper):
         metrics = {'clipfrac': 0.0, 'approx_kl': torch.tensor(0.0, device=self.device)}
         
         # Get new log_probs, value, and entropy if needed
+        detach_continuous_for_extra_epochs = bool(
+            self.ppo_params.get('discrete_only_extra_epochs', False) and epoch > 0
+        )
         continuous_samples = mb_data.get('raw_continuous_samples', None)
         new_log_probs, newvalue, entropy = None, None, None
         
@@ -812,7 +815,8 @@ class HybridWrapper(BaseOptimizerWrapper):
             new_log_probs, newvalue, entropy = self.model.get_log_probs_value_and_entropy(
                 mb_data['observations'],
                 mb_data.get('discrete_action_indices', None),
-                continuous_samples
+                continuous_samples,
+                detach_continuous=detach_continuous_for_extra_epochs
             )
         elif required_losses['value']:
             value_net = getattr(self.model, 'value_net', None)

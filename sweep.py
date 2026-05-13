@@ -323,6 +323,7 @@ def train_sweep(sweep_config):
                 'learning_rate': ('hyperparams', ['optimizer_params', 'learning_rate']),
                 'anneal_lr': ('hyperparams', ['optimizer_params', 'anneal_lr']),
                 'num_epochs': ('hyperparams', ['optimizer_params', 'ppo_params', 'num_epochs']),
+                'discrete_only_extra_epochs': ('hyperparams', ['optimizer_params', 'ppo_params', 'discrete_only_extra_epochs']),
                 'trainer_epochs': ('hyperparams', ['trainer_params', 'epochs']),
                 'training_epochs': ('hyperparams', ['trainer_params', 'epochs']),
                 'value_function_coef': ('hyperparams', ['optimizer_params', 'ppo_params', 'value_function_coef']),
@@ -353,6 +354,7 @@ def train_sweep(sweep_config):
                 'use_straight_through': ('hyperparams', ['agent_params', 'use_straight_through']),
                 'add_gumbel_noise': ('hyperparams', ['agent_params', 'add_gumbel_noise']),
                 'fixed_lqr_mode': ('hyperparams', ['agent_params', 'fixed_lqr_mode']),
+                'fixed_std': ('hyperparams', ['agent_params', 'fixed_std']),
                 # Add mapping for continuous scale parameter - updated path
                 'continuous_scale': ('hyperparams', ['nn_params', 'policy_network', 'continuous_scale']),
                 'continuous_shift': ('hyperparams', ['nn_params', 'policy_network', 'continuous_shift']),
@@ -484,6 +486,90 @@ def train_sweep(sweep_config):
                     return scale
                 return run_config.get('degradation_scale')
 
+            def _apply_one_off_hparam_tuple(run_config, setting_cfg, hyperparams_cfg):
+                """
+                Apply one-off tuple override with precedence over individual sweep keys.
+                Tuple order:
+                (
+                    entropy_coef, learning_rate, normalize_observations, reward_scaling,
+                    fixed_std, num_epochs, value_function_coef, clip_coef,
+                    discrete_only_extra_epochs (optional; defaults to False)
+                )
+                """
+                if 'one_off_hparam_tuple' not in run_config:
+                    return
+
+                tuple_value = run_config['one_off_hparam_tuple']
+                parsed_tuple = None
+
+                if isinstance(tuple_value, (list, tuple)):
+                    parsed_tuple = list(tuple_value)
+                elif isinstance(tuple_value, dict):
+                    ordered_keys = [
+                        'entropy_coef',
+                        'learning_rate',
+                        'normalize_observations',
+                        'reward_scaling',
+                        'fixed_std',
+                        'num_epochs',
+                        'value_function_coef',
+                        'clip_coef',
+                        'discrete_only_extra_epochs',
+                    ]
+                    parsed_tuple = [tuple_value.get(k) for k in ordered_keys]
+                else:
+                    raise ValueError(
+                        "one_off_hparam_tuple must be a list/tuple of length 8 or 9, or a dict "
+                        "with keys: entropy_coef, learning_rate, normalize_observations, "
+                        "reward_scaling, fixed_std, num_epochs, value_function_coef, clip_coef, "
+                        "discrete_only_extra_epochs (optional). "
+                        f"Got: {tuple_value!r}"
+                    )
+
+                if len(parsed_tuple) not in (8, 9):
+                    raise ValueError(
+                        "one_off_hparam_tuple must contain 8 or 9 values in this order: "
+                        "(entropy_coef, learning_rate, normalize_observations, reward_scaling, "
+                        "fixed_std, num_epochs, value_function_coef, clip_coef, "
+                        "discrete_only_extra_epochs(optional)). "
+                        f"Got: {tuple_value!r}"
+                    )
+
+                if len(parsed_tuple) == 8:
+                    parsed_tuple.append(False)
+
+                (
+                    entropy_coef,
+                    learning_rate,
+                    normalize_observations,
+                    reward_scaling,
+                    fixed_std,
+                    num_epochs,
+                    value_function_coef,
+                    clip_coef,
+                    discrete_only_extra_epochs
+                ) = parsed_tuple
+
+                # Apply with explicit precedence over individual scalar keys
+                hyperparams_cfg.setdefault('optimizer_params', {}).setdefault('ppo_params', {})['entropy_coef'] = entropy_coef
+                hyperparams_cfg.setdefault('optimizer_params', {})['learning_rate'] = learning_rate
+                setting_cfg.setdefault('observation_params', {})['normalize_observations'] = normalize_observations
+                hyperparams_cfg.setdefault('optimizer_params', {}).setdefault('ppo_params', {})['reward_scaling'] = reward_scaling
+                hyperparams_cfg.setdefault('agent_params', {})['fixed_std'] = fixed_std
+                hyperparams_cfg.setdefault('optimizer_params', {}).setdefault('ppo_params', {})['num_epochs'] = int(num_epochs)
+                hyperparams_cfg.setdefault('optimizer_params', {}).setdefault('ppo_params', {})['value_function_coef'] = value_function_coef
+                hyperparams_cfg.setdefault('optimizer_params', {}).setdefault('ppo_params', {})['clip_coef'] = clip_coef
+                hyperparams_cfg.setdefault('optimizer_params', {}).setdefault('ppo_params', {})['discrete_only_extra_epochs'] = bool(discrete_only_extra_epochs)
+
+                print(
+                    f"Applied one_off_hparam_tuple={tuple_value!r}: "
+                    f"entropy_coef={entropy_coef}, learning_rate={learning_rate}, "
+                    f"normalize_observations={normalize_observations}, reward_scaling={reward_scaling}, "
+                    f"fixed_std={fixed_std}, num_epochs={num_epochs}, "
+                    f"value_function_coef={value_function_coef}, clip_coef={clip_coef}, "
+                    f"discrete_only_extra_epochs={bool(discrete_only_extra_epochs)}"
+                )
+
             # Update configs based on sweep parameters from run.config
             for param_name, param_value in run.config.items():
                 if param_name == 'stores':
@@ -600,6 +686,10 @@ def train_sweep(sweep_config):
                     f"Applied batch_trainer_pair={pair_value!r}: "
                     f"batch_size={parsed_batch_size}, trainer_epochs={parsed_trainer_epochs}"
                 )
+
+            # One-off hyperparameter tuple override.
+            # This intentionally runs after scalar param mapping and takes precedence.
+            _apply_one_off_hparam_tuple(run.config, setting_config, hyperparams_config)
 
             # Apply a shared perturbation after explicit overrides
             _apply_degradation_scale(

@@ -1,8 +1,10 @@
 import torch
 import torch.nn.functional as F
+import copy
 from src.algorithms.common.policies.policy import HybridPolicy, NeuralNetworkCreator
 # from src.algorithms.common.policies.policy import HybridPolicy, NeuralNetworkCreator, ContinuousPolicy
 from src.algorithms.common.values.value_network import ValueNetwork
+from src.algorithms.common.values.q_network import QNetwork
 import torch.nn as nn
 import torch.distributions as dist
 import numpy as np
@@ -74,7 +76,7 @@ class BaseAgent(nn.Module):
         """Return whether the agent is trainable"""
         return self.policy.trainable
     
-    def get_log_probs_value_and_entropy(self, processed_observation, action_indices):
+    def get_log_probs_value_and_entropy(self, processed_observation, action_indices, continuous_samples=None, detach_continuous=False):
         """Get logits for specific actions, value, and entropy. Override in subclasses."""
         raise NotImplementedError
     
@@ -362,7 +364,7 @@ class HybridAgent(BaseAgent):
         distribution = torch.distributions.Categorical(logits=logits)
         return distribution.entropy()
     
-    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None, detach_continuous=False):
         """
         Get logits, value, and entropy for PPO
         """
@@ -385,6 +387,49 @@ class HybridAgent(BaseAgent):
             'pathwise': True,          # For continuous actions
             'entropy': True            # For exploration
         }
+
+
+class LearnedCriticPathwiseAgent(HybridAgent):
+    """
+    Hybrid agent ablation where continuous pathwise gradients are routed through
+    a learned Q(s, a) critic instead of true simulator gradients.
+    """
+
+    def __init__(self, config, feature_registry=None, device='cpu'):
+        super().__init__(config, feature_registry, device)
+
+        q_params = copy.deepcopy(config['nn_params'].get('q_network', {}))
+        q_params['input_size'] = self.feature_registry.get_network_dimensions()['input_size']
+        q_params['action_size'] = self.feature_registry.n_stores
+        self.q_net = QNetwork(q_params, device=device)
+
+        self.q_net_target = copy.deepcopy(self.q_net)
+        for param in self.q_net_target.parameters():
+            param.requires_grad = False
+
+        agent_params = config.get('agent_params', {})
+        self.tau = float(agent_params.get('tau', 0.005))
+        self.gamma = float(agent_params.get('gamma', 0.99))
+
+    def _get_required_losses(self):
+        return {
+            'policy_gradient': True,
+            'value': True,
+            'pathwise': False,
+            'entropy': True,
+            'learned_critic': True
+        }
+
+    def soft_update_target(self):
+        for target_param, param in zip(self.q_net_target.parameters(), self.q_net.parameters()):
+            target_param.data.mul_(1.0 - self.tau).add_(self.tau * param.data)
+
+    def parameters(self):
+        params = list(self.policy.parameters())
+        if self.value_net is not None:
+            params += list(self.value_net.parameters())
+        params += list(self.q_net.parameters())
+        return params
 
 class AlternateHybridAgent(HybridAgent):
 
@@ -822,11 +867,11 @@ class FixedModeLqrRiccatiAgent(BaseAgent):
         self.action_dim = self.lqr_B.shape[2]
 
     def _load_fixed_mode(self):
-        self.fixed_mode = int(self.agent_params.get('fixed_lqr_mode', 0))
-        if self.fixed_mode < 0 or self.fixed_mode >= self.n_modes:
-            raise ValueError(
-                f"fixed_lqr_mode must be in [0, {self.n_modes - 1}], got {self.fixed_mode}."
-            )
+        requested_mode = int(self.agent_params.get('fixed_lqr_mode', 0))
+        if requested_mode < 0:
+            raise ValueError(f"fixed_lqr_mode must be non-negative, got {requested_mode}.")
+        # 0-based indexing: clip out-of-range sweep values to the last valid mode.
+        self.fixed_mode = min(requested_mode, self.n_modes - 1)
 
     def _compute_lqr_gain(self):
         mode = self.fixed_mode
@@ -854,16 +899,22 @@ class FixedModeLqrRiccatiAgent(BaseAgent):
         u = -torch.einsum('ij,bj->bi', self.K, x)
 
         batch_size = x.shape[0]
-        discrete_probs = torch.zeros(batch_size, 1, self.n_modes, device=self.device, dtype=x.dtype)
-        mode_idx = torch.full((batch_size, 1), self.fixed_mode, device=self.device, dtype=torch.long)
-        discrete_probs.scatter_(2, mode_idx.unsqueeze(-1), 1.0)
-
         n_stores = self.feature_registry.n_stores
         n_sub_ranges = self.feature_registry.n_sub_ranges
+        if n_sub_ranges <= 0:
+            raise ValueError(f"Expected n_sub_ranges > 0, got {n_sub_ranges}.")
+
+        # Use fixed LQR mode for controller selection, but keep action tensors aligned
+        # to range-manager dimensions (n_sub_ranges) to avoid invalid CUDA scatter indices.
+        action_idx_val = min(self.fixed_mode, n_sub_ranges - 1)
+        action_idx = torch.full((batch_size, 1), action_idx_val, device=self.device, dtype=torch.long)
+        discrete_probs = torch.zeros(batch_size, 1, n_sub_ranges, device=self.device, dtype=x.dtype)
+        discrete_probs.scatter_(2, action_idx.unsqueeze(-1), 1.0)
+
         u_full = torch.zeros(batch_size, n_stores, device=self.device, dtype=x.dtype)
         u_full[:, :self.action_dim] = u
         continuous_values = torch.zeros(batch_size, n_stores, n_sub_ranges, device=self.device, dtype=x.dtype)
-        continuous_values.scatter_(2, mode_idx.unsqueeze(1).expand(-1, n_stores, 1), u_full.unsqueeze(-1))
+        continuous_values.scatter_(2, action_idx.unsqueeze(1).expand(-1, n_stores, 1), u_full.unsqueeze(-1))
 
         feature_actions = self.feature_registry.compute_feature_actions_from_outputs(
             discrete_probs,
@@ -872,7 +923,7 @@ class FixedModeLqrRiccatiAgent(BaseAgent):
 
         action_dict = {
             'discrete_probs': discrete_probs,
-            'discrete_action_indices': mode_idx,
+            'discrete_action_indices': action_idx,
             'log_probs': None,
             'continuous_values': continuous_values,
             'feature_actions': feature_actions
@@ -1243,7 +1294,7 @@ class FactoredHybridAgent(HybridAgent):
             'vectorized_observation': processed_obs if process_state else None
         }
 
-    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None, detach_continuous=False):
         raise NotImplementedError("check that normalization of the logits is correct")
         """Get logits, value, and entropy for PPO (only for discrete part)"""
         # Get discrete logits
@@ -1345,7 +1396,7 @@ class GumbelSoftmaxAgent(HybridAgent):
             'vectorized_observation': processed_obs
         }
     
-    def get_log_probs_value_and_entropy(self, processed_observation, action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, action_indices, continuous_samples=None, detach_continuous=False):
         """
         Get logits, value, and entropy for GumbelSoftmax agent.
         Returns None, None, and entropy (only from discrete head).
@@ -1527,7 +1578,7 @@ class ContinuousOnlyAgent(BaseAgent):
             'vectorized_observation': processed_obs
         }
     
-    def get_log_probs_value_and_entropy(self, processed_observation, action_indices):
+    def get_log_probs_value_and_entropy(self, processed_observation, action_indices, continuous_samples=None, detach_continuous=False):
         """Not used for this agent as we only have pathwise gradients"""
         # This method exists for API compatibility but will not be used for training
         raw_outputs = self.policy(processed_observation, process_state=False)
@@ -1692,7 +1743,7 @@ class GaussianPPOAgent(HybridAgent):
         # = 0.5 + 0.5*log(2*pi) + log_std
         return 0.5 + 0.5 * torch.log(2 * torch.tensor(torch.pi, device=log_std.device)) + log_std
     
-    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None, detach_continuous=False):
         """
         Get combined log probabilities (discrete + continuous), value, and entropy for PPO.
         This is the non-factored version: the policy outputs both discrete logits and
@@ -1727,6 +1778,9 @@ class GaussianPPOAgent(HybridAgent):
         # Compute continuous log probabilities (only if samples provided)
         continuous_log_probs = None
         if continuous_samples is not None and continuous_mean is not None and continuous_log_std is not None:
+            if detach_continuous:
+                continuous_mean = continuous_mean.detach()
+                continuous_log_std = continuous_log_std.detach()
             continuous_log_std = torch.clamp(continuous_log_std, min=-20, max=2)
             continuous_std = torch.exp(continuous_log_std)
 
@@ -1955,7 +2009,7 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
             params.append(self.log_std)
         return params
     
-    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None):
+    def get_log_probs_value_and_entropy(self, processed_observation, discrete_action_indices, continuous_samples=None, detach_continuous=False):
         """
         Get combined log probabilities (discrete + continuous), value, and entropy for PPO
         
@@ -2000,6 +2054,11 @@ class FactoredGaussianPPOAgent(GaussianPPOAgent):
             clamped_log_std = torch.clamp(selected_log_std, min=-20, max=2)
             continuous_std = torch.exp(clamped_log_std).expand_as(selected_continuous_mean)
             log_std_expanded = clamped_log_std.expand_as(selected_continuous_mean)
+
+        if detach_continuous:
+            selected_continuous_mean = selected_continuous_mean.detach()
+            continuous_std = continuous_std.detach()
+            log_std_expanded = log_std_expanded.detach()
         
         # Use the helper function to calculate total log probabilities
         mean_per_store = selected_continuous_mean.unsqueeze(-1).expand(
