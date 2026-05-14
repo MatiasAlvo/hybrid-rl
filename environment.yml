@@ -1,6 +1,7 @@
 name: exp_neural
 channels:
   - pytorch
+  - nvidia
   - conda-forge
   - defaults
 dependencies:
@@ -9,9 +10,10 @@ dependencies:
   - numpy>=1.21.0
   - pandas>=1.4.0
   - scipy>=1.8.0
+  # Not imported by src/ or sweep.py; used only in some notebooks (optional)
   - scikit-learn>=1.1.0
   
-  # PyTorch ecosystem
+  # PyTorch ecosystem (torchvision/torchaudio are not imported by src/; safe to drop for a slimmer env)
   - pytorch>=2.0.0
   - torchvision
   - torchaudio
@@ -40,28 +42,30 @@ dependencies:
   
   # Pip-only packages
   - pip:
-    # Core RL libraries
+    # Core RL libraries (required: InventoryEnv / data_handling)
     - torchrl>=0.2.0
     - tensordict>=0.2.0
     
-    # Logging and monitoring
+    # Logging (SummaryWriter is imported in src/utils/logger.py even when TB logging is off)
     - wandb>=0.15.0
     - tensorboard>=2.10.0
     
-    # Distributed computing
+    # Tests (see tests/requirements.txt)
+    - pytest>=6.0.0
+    
+    # Distributed sweeps (sweep.py)
     - ray[default]>=2.5.0
     
-    # Data processing
+    # notebooks/examples/censored_demand.ipynb
+    - lifelines>=0.27.0
+    
+    # Optional: not imported by src/ or sweep.py; keep for notebooks / ad-hoc analysis
     - openpyxl>=3.0.0
     - statsmodels>=0.13.0
-    
-    # Web and utilities
     - beautifulsoup4>=4.11.0
     - requests>=2.28.0
-    
-    # Additional useful packages
-    - plotly>=5.0.0  # for interactive plots
-    - plotly-orca>=1.3.0  # for static plot export
-    - jupyter-dash>=0.4.0  # for interactive dashboards
-    - memory-profiler>=0.60.0  # for memory profiling
-    - psutil>=5.9.0  # for system monitoring
+    - plotly>=5.0.0
+    - plotly-orca>=1.3.0
+    - jupyter-dash>=0.4.0
+    - memory-profiler>=0.60.0
+    - psutil>=5.9.0

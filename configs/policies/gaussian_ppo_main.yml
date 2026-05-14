@@ -1,0 +1,64 @@
+# Minimal Gaussian PPO (separate_network_policy) baseline — same spirit as hybrid_main.yml.
+# GaussianPPOAgent uses policy_gradient + value + entropy only (no pathwise loss), but
+# HybridWrapper still requires pathwise_coef and reward_scaling_pathwise keys.
+
+trainer_params:
+  epochs: 150
+  print_results_every_n_epochs: 1
+  save_model: false
+  epochs_between_save: 1
+  choose_best_model_on: dev_loss
+  load_previous_model: false
+  load_model_path: ''
+  base_dir: models/saved_models
+
+logging_params:
+  use_wandb: false
+  wandb_project_name: inventory_control
+  wandb_entity: alvomatias
+  exp_name: gaussian_ppo_main
+  env_name: inventory
+  setting_name: one_store_fixed_costs
+
+agent_params:
+  agent_type: gaussian_ppo
+  fixed_std: true
+
+optimizer_params:
+  learning_rate: 0.0003
+  anneal_lr: false
+  ppo_params:
+    clip_coef: 0.2
+    gamma: 0.99
+    gae_lambda: 0.95
+    normalize_advantages: true
+    use_gae: true
+    num_epochs: 5
+    value_function_coef: 0.5
+    pathwise_coef: 1.0
+    reward_scaling_pathwise: true
+    reward_scaling: true
+    buffer_periods: 20
+    max_grad_norm: 5.0
+    entropy_coef: 0.0
+    anneal_entropy_coef: false
+
+nn_params:
+  policy_network:
+    name: separate_network_policy
+    hidden_layers: [64, 64]
+    activation: Tanh
+    continuous_scale: 1.0
+    continuous_shift: 0.0
+    observation_keys: ['store_inventories']
+    normalize_by_mean_demand: false
+    heads:
+      discrete:
+        enabled: true
+      continuous:
+        enabled: true
+
+  value_network:
+    enabled: true
+    hidden_layers: [64, 64]
+    activation: Tanh

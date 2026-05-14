@@ -27,33 +27,25 @@ agent_params:
   'fixed_std': true  # Set to false for state-dependent standard deviation
 
 optimizer_params:
-  # 'learning_rate': 0.015
   'learning_rate': 0.0001
-  'anneal_lr': true
-  'weight_decay': 0.0
-  'lr_multipliers':
-    'value': 1.0
-    'backbone': 1.0
-    'continuous': 1.0
-    'discrete': 1.0
-    'other': 1.0
+  'anneal_lr': false
   'ppo_params':
-    'clip_coef': 0.2
-    'gamma': 0.95
-    'gae_lambda': 0.95
+    'clip_coef': 0.15
+    'gamma': 0.93
+    'gae_lambda': 0.96
     'normalize_advantages': true
     'normalize_observations': false
     'pathwise_coef': 1.0
     'reward_scaling': true
     'reward_scaling_pathwise': true
     'clip_value_loss': false
-    'entropy_coef': 0.1
+    'entropy_coef': 0.5
     'anneal_entropy_coef': true
-    'min_entropy_coef': 0.0
+    'min_entropy_coef': 0.001
     'use_gae': true
     'num_epochs': 5
     'discrete_only_extra_epochs': false
-    'value_function_coef': 0.1
+    'value_function_coef': 0.15
     'clip_by_component': true
     'buffer_periods': 20
     'max_grad_norm': 5.0
@@ -62,14 +54,13 @@ nn_params:
   policy_network:
     name: 'separate_network_policy'
     input_size: null  # Let it be determined automatically
-    hidden_layers: [256, 256]
+    hidden_layers: [512, 512]
     # activation: 'ELU'
     activation: 'Tanh'
     dropout: 0.0
     batch_norm: false
     continuous_scale: 1.0
     continuous_shift: 1.0  # Remember to change to 1.0 afterwards
-    # Updated observation keys to match hybrid policy
     observation_keys: ['store_inventories', 'underage_costs', 'holding_costs', 'mean']
     normalize_by_mean_demand: true  # Normalize quantity-related inputs by mean demand
     heads:
@@ -85,7 +76,7 @@ nn_params:
   value_network:
     enabled: true
     input_size: null  # Let it be determined automatically
-    hidden_layers: [64, 64]
+    hidden_layers: [512, 512]
     activation: 'Tanh'
     dropout: 0.0
     batch_norm: false

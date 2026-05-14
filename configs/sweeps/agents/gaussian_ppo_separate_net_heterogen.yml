@@ -38,8 +38,6 @@ parameters:
   learning_rate:
     values:
       - 0.0001
-      # - 0.0003
-      # - 0.001
   max_grad_norm:
     values:
       - 5.0

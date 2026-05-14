@@ -1,0 +1,63 @@
+trainer_params:
+  epochs: 150
+  print_results_every_n_epochs: 1
+  save_model: false
+  epochs_between_save: 1
+  choose_best_model_on: dev_loss
+  load_previous_model: False
+  load_model_path: ''
+  base_dir: models/saved_models
+
+logging_params:
+  use_wandb: false  
+  wandb_project_name: inventory_control
+  wandb_entity: alvomatias
+  exp_name: hybrid_separate_net
+  env_name: inventory
+  setting_name: one_store_fixed_costs
+
+agent_params:
+  agent_type: hybrid
+
+optimizer_params:
+  learning_rate: 0.001  
+  ppo_params:
+    clip_coef: 0.16  
+    gamma: 0.93  
+    gae_lambda: 0.96  
+    normalize_advantages: true  
+    use_gae: true  
+    num_epochs: 5  
+    value_function_coef: 0.13  
+    pathwise_coef: 1.0  
+    reward_scaling_pathwise: true  
+    reward_scaling: true  
+    buffer_periods: 20  
+    max_grad_norm: 5.0  
+    entropy_coef: 0.01
+    anneal_entropy_coef: true
+    min_entropy_coef: 0.001
+    disable_cross_term: false
+
+nn_params:
+  policy_network:
+    name: separate_network_policy
+    hidden_layers: [64, 64]
+    activation: Tanh
+    continuous_scale: 1.0  
+    continuous_shift: 0.0  
+    observation_keys: ['store_inventories']
+    normalize_by_mean_demand: False
+    heads:
+      discrete:
+        enabled: true
+        activation: Linear
+      continuous:
+        enabled: true
+        activation: Linear
+
+  value_network:
+    enabled: true
+    input_size: 2
+    hidden_layers: [64, 64]
+    activation: Tanh
