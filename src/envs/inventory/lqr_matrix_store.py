@@ -195,6 +195,22 @@ def _validate_lqr_modes(problem_params: Dict, n_modes: int, lqr_params: Dict) ->
         )
 
 
+def _derive_lqr_mode_feature(problem_params: Dict, n_modes: int) -> None:
+    """Size the discrete head to the number of LQR modes: one sub-range per mode.
+
+    The RangeManager builds the discrete head from discrete_features['lqr_mode'], not from
+    n_modes, so without this a sweep over n_modes changes the matrices but not the set of
+    modes the policy can select. Opt out with derive_lqr_mode_from_n_modes: false.
+    """
+    if not problem_params.get("derive_lqr_mode_from_n_modes", True):
+        return
+    discrete_features = problem_params.setdefault("discrete_features", {})
+    discrete_features["lqr_mode"] = {
+        "thresholds": list(range(n_modes + 1)),
+        "values": list(range(n_modes)),
+    }
+
+
 def prepare_lqr_matrices(problem_params: Dict) -> None:
     if problem_params.get("simulator_type") != "lqr_hybrid":
         return
@@ -202,7 +218,10 @@ def prepare_lqr_matrices(problem_params: Dict) -> None:
     lqr_params = problem_params.get("lqr", {})
     if all(key in lqr_params for key in ("A", "B", "Q", "R")):
         n_modes = problem_params.get("n_modes")
+        if n_modes is None:
+            n_modes = _matrix_mode_count(lqr_params.get("A"))
         if n_modes is not None:
+            _derive_lqr_mode_feature(problem_params, n_modes)
             _validate_lqr_modes(problem_params, n_modes, lqr_params)
         return
 
@@ -238,4 +257,5 @@ def prepare_lqr_matrices(problem_params: Dict) -> None:
 
     lqr_params = {**lqr_params, **matrices}
     problem_params["lqr"] = lqr_params
+    _derive_lqr_mode_feature(problem_params, n_modes)
     _validate_lqr_modes(problem_params, n_modes, lqr_params)

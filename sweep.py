@@ -296,6 +296,11 @@ class TrainingWorker:
             return True
             
         except Exception as e:
+            # Raising here makes the driver's ray.get fail and tears down sibling runs that
+            # are still training, so an exhausted sweep must not count as an error.
+            if "is not running" in str(e):
+                logging.info(f"Sweep {sweep_id} has no runs left; worker on GPU {self.gpu_id} is idle")
+                return False
             logging.error(f"Error in sweep on GPU {self.gpu_id}: {str(e)}")
             raise
 
@@ -374,6 +379,7 @@ def train_sweep(sweep_config):
                 'n_stores': ('setting', ['problem_params', 'n_stores']),
                 'stores': ('setting', ['problem_params', 'n_stores']),
                 'n_modes': ('setting', ['problem_params', 'n_modes']),
+                'derive_lqr_mode_from_n_modes': ('setting', ['problem_params', 'derive_lqr_mode_from_n_modes']),
                 'sweep_top_k_split_by': ('hyperparams', ['trainer_params', 'sweep_top_k_split_by']),
                 'sweep_top_k_metric': ('hyperparams', ['trainer_params', 'sweep_top_k_metric']),
             }
@@ -569,6 +575,18 @@ def train_sweep(sweep_config):
                     f"value_function_coef={value_function_coef}, clip_coef={clip_coef}, "
                     f"discrete_only_extra_epochs={bool(discrete_only_extra_epochs)}"
                 )
+
+            # A grid sweep can only express Cartesian products. To run an arbitrary list of
+            # configurations, a sweep can use 'grid_point' values like
+            # "stores=8,n_modes=4,a_seed=5,disable_cross_term=false"; they are expanded into
+            # top-level config keys so the mappings below and the analysis code see them as usual.
+            if 'grid_point' in run.config:
+                point = {}
+                for item in str(run.config['grid_point']).split(','):
+                    key, value = item.split('=', 1)
+                    point[key.strip()] = yaml.safe_load(value.strip())
+                run.config.update(point, allow_val_change=True)
+                print(f"Expanded grid_point into: {point}")
 
             # Update configs based on sweep parameters from run.config
             for param_name, param_value in run.config.items():
@@ -925,7 +943,8 @@ if __name__ == "__main__":
     
     if args.agent:
         # Load the sweep ID
-        sweep_id = load_sweep_id()
+        # SWEEP_ID lets several agents start back to back without racing on sweep_id.txt.
+        sweep_id = os.environ.get("SWEEP_ID") or load_sweep_id()
         if sweep_id is None:
             raise ValueError("No sweep ID found. Please create a sweep first using --create")
         sweep_project = load_sweep_project()

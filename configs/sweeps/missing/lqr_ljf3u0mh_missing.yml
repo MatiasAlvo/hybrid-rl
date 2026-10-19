@@ -1,0 +1,1085 @@
+method: grid
+metric:
+  goal: minimize
+  name: dev/loss/best
+parameters:
+  add_gumbel_noise:
+    values:
+    - false
+  anneal_entropy_coef:
+    values:
+    - true
+  anneal_lr:
+    values:
+    - false
+  batch_size:
+    values:
+    - 128
+  buffer_periods:
+    values:
+    - 0
+  clip_coef:
+    values:
+    - 0.15
+  config_files:
+    value:
+      hyperparams: configs/policies/hybrid_separate_net_lqr.yml
+      setting: configs/settings/lqr_switched.yml
+  continuous_scale:
+    values:
+    - 1
+  continuous_shift:
+    values:
+    - 0
+  derive_lqr_mode_from_n_modes:
+    values:
+    - true
+  entropy_coef:
+    values:
+    - 0.5
+  gae_lambda:
+    values:
+    - 0.96
+  gamma:
+    values:
+    - 0.99
+  hidden_layers:
+    values:
+    - - 512
+      - 512
+  hyperparams_config:
+    value:
+      agent_params:
+        add_gumbel_noise: false
+        agent_type: hybrid
+        initial_temperature: 1
+        min_temperature: 0.001
+        temperature_decay: 0.997
+        use_straight_through: false
+      logging_params:
+        env_name: lqr_switched
+        exp_name: hybrid_separate_net
+        log_inventory_action0_heatmap: false
+        log_inventory_action_plot: false
+        log_inventory_discrete_action0_prob_plot: false
+        log_inventory_value_plot: false
+        normalize_plots_by_mean_demand: false
+        setting_name: lqr_switched
+        use_tensorboard: false
+        use_wandb: false
+        wandb_entity: alvomatias
+        wandb_project_name: lqr_switched
+      nn_params:
+        policy_network:
+          activation: Tanh
+          batch_norm: false
+          continuous_scale: 1
+          continuous_shift: 0
+          disable_continuous_scaling: true
+          dropout: 0
+          heads:
+            continuous:
+              activation: Linear
+              enabled: true
+            discrete:
+              activation: Linear
+              enabled: true
+          hidden_layers:
+          - 512
+          - 512
+          init_discrete_uniform: true
+          input_size: null
+          name: separate_network_policy
+          normalize_by_mean_demand: false
+          observation_keys:
+          - store_inventories
+        value_network:
+          activation: Tanh
+          enabled: true
+          hidden_layers:
+          - 512
+          - 512
+          observation_keys:
+          - store_inventories
+      optimizer_params:
+        anneal_lr: false
+        learning_rate: 0.001
+        lr_multipliers:
+          backbone: 1
+          continuous: 1
+          discrete: 1
+          other: 1
+          value: 1
+        ppo_params:
+          anneal_entropy_coef: true
+          buffer_periods: 0
+          clip_coef: 0.15
+          disable_cross_term: false
+          entropy_coef: 0.5
+          gae_lambda: 0.96
+          gamma: 0.99
+          max_grad_norm: 5
+          min_entropy_coef: 0.001
+          normalize_advantages: true
+          num_epochs: 5
+          pathwise_coef: 5
+          reward_scaling: true
+          reward_scaling_pathwise: true
+          use_gae: true
+          value_function_coef: 0.15
+        weight_decay: 0
+      trainer_params:
+        base_dir: models/saved_models
+        choose_best_model_on: dev_loss
+        compute_metrics_on_test: false
+        do_dev_every_n_epochs: 1
+        epochs: 500
+        epochs_between_save: 1
+        load_model_path: models/saved_models/2025_10_22/one_store_fixed_costs/hybrid_policy/1761149697_246.pt
+        load_previous_model: false
+        print_results_every_n_epochs: 1
+        save_model: false
+        sweep_top_k: 0
+        sweep_top_k_split_by: n_stores
+  learning_rate:
+    values:
+    - 0.001
+  max_grad_norm:
+    values:
+    - 5
+  min_entropy_coef:
+    values:
+    - 0.001
+  normalize_advantages:
+    values:
+    - true
+  normalize_by_mean_demand:
+    values:
+    - false
+  normalize_observations:
+    values:
+    - false
+  num_epochs:
+    values:
+    - 5
+  pathwise_coef:
+    values:
+    - 5
+  policy_activation:
+    values:
+    - Tanh
+  reward_scaling:
+    values:
+    - true
+  reward_scaling_pathwise:
+    values:
+    - true
+  setting_config:
+    value:
+      echelon_params: null
+      observation_params:
+        demand:
+          past_periods: 0
+          period_shift: 0
+        include_past_observations:
+          arrivals: 0
+          orders: 0
+        include_static_features:
+          holding_costs: false
+          lead_times: false
+          mean: false
+          procurement_costs: false
+          std: false
+          underage_costs: false
+          upper_bounds: false
+        include_warehouse_inventory: false
+        normalize_observations: false
+        sample_features: null
+        sample_features_file: null
+        time_features: null
+        time_features_file: null
+      params_by_dataset:
+        dev:
+          batch_size: 1024
+          ignore_periods: 0
+          n_samples: 1024
+          periods: 20
+        test:
+          batch_size: 1024
+          ignore_periods: 0
+          n_samples: 1024
+          periods: 20
+        train:
+          batch_size: 128
+          ignore_periods: 0
+          n_samples: 1024
+          periods: 20
+      problem_params:
+        discrete_features:
+          lqr_mode:
+            thresholds:
+            - 0
+            - 1
+            values:
+            - 0
+        is_hybrid: true
+        lost_demand: false
+        lqr:
+          b_high: 1
+          b_low: 0.15
+          coupling_strength: 0.05
+          instability: 1.1
+          lambda_u: 0.1
+          seed: 0
+        maximize_profit: false
+        n_extra_echelons: 0
+        n_modes: 1
+        n_stores: 1
+        n_warehouses: 0
+        setting_name: lqr_switched
+        simulator_type: lqr_hybrid
+        skip_lqr_mode_validation: true
+      sample_data_params:
+        dev_periods: null
+        split_by_period: false
+        test_periods: null
+        train_periods: null
+      seeds:
+        coef_of_var: 5
+        demand: 7
+        holding_cost: 2
+        initial_inventory: 8
+        lead_time: 6
+        mean: 4
+        procurement_cost: 3
+        underage_cost: 1
+      store_params:
+        demand:
+          clip: false
+          decimals: 3
+          distribution: poisson
+          expand: false
+          mean: 1
+          sample_across_stores: false
+        holding_cost:
+          expand: true
+          sample_across_stores: false
+          value: 0
+          vary_across_samples: false
+        initial_inventory:
+          inventory_periods: 1
+          sample: true
+          scale_by_sqrt_dim: true
+          uniform_range:
+          - -10
+          - 10
+        lead_time:
+          expand: true
+          sample_across_stores: false
+          value: 0
+          vary_across_samples: false
+        procurement_cost:
+          expand: true
+          sample_across_stores: false
+          value: 0
+          vary_across_samples: false
+        underage_cost:
+          expand: true
+          sample_across_stores: false
+          value: 0
+          vary_across_samples: false
+      test_seeds:
+        coef_of_var: 13
+        demand: 15
+        holding_cost: 10
+        initial_inventory: 16
+        lead_time: 14
+        mean: 12
+        procurement_cost: 11
+        underage_cost: 9
+      wandb_config:
+        group: lqr_switched
+        track_params: []
+      warehouse_params:
+        holding_cost: 0
+        lead_time: 0
+  sweep_top_k_split_by:
+    values:
+    - n_stores
+  use_gae:
+    values:
+    - true
+  use_wandb:
+    values:
+    - true
+  value_activation:
+    values:
+    - Tanh
+  value_function_coef:
+    values:
+    - 0.15
+  grid_point:
+    values:
+    - stores=24,n_modes=2,a_seed=0,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=1,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=1,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=1,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=1,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=3,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=3,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=3,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=3,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=3,disable_cross_term=false
+    - stores=13,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=16,n_modes=8,a_seed=3,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=20,n_modes=8,a_seed=3,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=24,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=32,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=40,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=48,n_modes=8,a_seed=3,disable_cross_term=true
+    - stores=1,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=1,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=3,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=3,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=5,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=5,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=7,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=7,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=8,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=8,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=10,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=13,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=16,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=16,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=20,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=20,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=24,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=24,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=32,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=32,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=40,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=40,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=48,n_modes=2,a_seed=4,disable_cross_term=false
+    - stores=48,n_modes=2,a_seed=4,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=1,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=3,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=3,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=5,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=5,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=7,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=7,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=8,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=10,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=10,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=13,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=16,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=20,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=24,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=32,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=40,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=4,disable_cross_term=false
+    - stores=48,n_modes=4,a_seed=4,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=1,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=3,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=5,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=7,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=13,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=16,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=20,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=24,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=24,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=32,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=40,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=4,disable_cross_term=false
+    - stores=48,n_modes=6,a_seed=4,disable_cross_term=true
+    - stores=1,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=1,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=3,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=5,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=7,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=8,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=13,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=16,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=20,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=24,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=24,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=32,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=32,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=40,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=40,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=48,n_modes=8,a_seed=4,disable_cross_term=false
+    - stores=48,n_modes=8,a_seed=4,disable_cross_term=true
+    - stores=1,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=1,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=3,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=3,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=5,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=5,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=7,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=7,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=8,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=8,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=10,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=13,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=16,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=16,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=20,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=20,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=24,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=24,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=32,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=32,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=40,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=40,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=48,n_modes=2,a_seed=5,disable_cross_term=false
+    - stores=48,n_modes=2,a_seed=5,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=1,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=3,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=3,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=5,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=5,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=7,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=7,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=8,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=10,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=10,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=13,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=16,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=20,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=24,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=32,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=40,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=5,disable_cross_term=false
+    - stores=48,n_modes=4,a_seed=5,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=1,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=3,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=5,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=7,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=13,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=16,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=20,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=24,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=24,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=32,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=40,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=5,disable_cross_term=false
+    - stores=48,n_modes=6,a_seed=5,disable_cross_term=true
+    - stores=1,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=1,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=3,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=5,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=7,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=8,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=13,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=16,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=20,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=24,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=24,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=32,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=32,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=40,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=40,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=48,n_modes=8,a_seed=5,disable_cross_term=false
+    - stores=48,n_modes=8,a_seed=5,disable_cross_term=true
+    - stores=1,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=1,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=3,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=3,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=5,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=5,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=7,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=7,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=8,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=8,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=10,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=13,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=16,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=16,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=20,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=20,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=24,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=24,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=32,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=32,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=40,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=40,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=48,n_modes=2,a_seed=6,disable_cross_term=false
+    - stores=48,n_modes=2,a_seed=6,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=1,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=3,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=3,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=5,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=5,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=7,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=7,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=8,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=10,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=10,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=13,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=16,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=20,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=24,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=32,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=40,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=6,disable_cross_term=false
+    - stores=48,n_modes=4,a_seed=6,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=1,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=3,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=5,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=7,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=13,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=16,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=20,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=24,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=24,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=32,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=40,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=6,disable_cross_term=false
+    - stores=48,n_modes=6,a_seed=6,disable_cross_term=true
+    - stores=1,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=1,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=3,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=5,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=7,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=8,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=13,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=16,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=20,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=24,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=24,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=32,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=32,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=40,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=40,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=48,n_modes=8,a_seed=6,disable_cross_term=false
+    - stores=48,n_modes=8,a_seed=6,disable_cross_term=true
+    - stores=1,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=1,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=3,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=3,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=5,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=5,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=7,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=7,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=8,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=8,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=10,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=13,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=16,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=16,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=20,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=20,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=24,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=24,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=32,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=32,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=40,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=40,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=48,n_modes=2,a_seed=7,disable_cross_term=false
+    - stores=48,n_modes=2,a_seed=7,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=1,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=3,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=3,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=5,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=5,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=7,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=7,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=8,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=10,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=10,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=13,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=16,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=20,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=24,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=32,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=40,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=7,disable_cross_term=false
+    - stores=48,n_modes=4,a_seed=7,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=1,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=3,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=5,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=7,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=13,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=16,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=20,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=24,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=24,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=32,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=40,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=7,disable_cross_term=false
+    - stores=48,n_modes=6,a_seed=7,disable_cross_term=true
+    - stores=1,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=1,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=3,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=5,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=7,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=8,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=13,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=16,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=20,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=24,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=24,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=32,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=32,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=40,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=40,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=48,n_modes=8,a_seed=7,disable_cross_term=false
+    - stores=48,n_modes=8,a_seed=7,disable_cross_term=true
+    - stores=1,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=1,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=3,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=3,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=5,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=5,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=7,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=7,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=8,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=8,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=10,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=13,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=16,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=16,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=20,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=20,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=24,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=24,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=32,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=32,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=40,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=40,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=48,n_modes=2,a_seed=8,disable_cross_term=false
+    - stores=48,n_modes=2,a_seed=8,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=1,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=3,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=3,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=5,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=5,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=7,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=7,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=8,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=10,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=10,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=13,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=16,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=20,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=24,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=32,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=40,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=8,disable_cross_term=false
+    - stores=48,n_modes=4,a_seed=8,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=1,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=3,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=5,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=7,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=13,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=16,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=20,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=24,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=24,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=32,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=40,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=8,disable_cross_term=false
+    - stores=48,n_modes=6,a_seed=8,disable_cross_term=true
+    - stores=1,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=1,n_modes=8,a_seed=8,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=3,n_modes=8,a_seed=8,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=5,n_modes=8,a_seed=8,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=7,n_modes=8,a_seed=8,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=8,n_modes=8,a_seed=8,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=8,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=24,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=32,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=40,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=48,n_modes=8,a_seed=8,disable_cross_term=false
+    - stores=1,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=3,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=5,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=5,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=7,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=7,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=8,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=8,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=10,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=13,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=16,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=16,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=20,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=20,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=24,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=24,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=32,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=32,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=40,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=40,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=48,n_modes=2,a_seed=9,disable_cross_term=false
+    - stores=48,n_modes=2,a_seed=9,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=1,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=3,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=3,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=5,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=5,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=7,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=7,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=8,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=10,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=10,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=13,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=16,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=20,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=24,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=32,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=40,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=9,disable_cross_term=false
+    - stores=48,n_modes=4,a_seed=9,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=1,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=3,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=5,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=7,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=13,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=16,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=20,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=24,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=24,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=32,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=40,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=9,disable_cross_term=false
+    - stores=48,n_modes=6,a_seed=9,disable_cross_term=true
+    - stores=1,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=1,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=3,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=5,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=7,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=8,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=13,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=16,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=20,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=24,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=24,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=32,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=32,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=40,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=40,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=48,n_modes=8,a_seed=9,disable_cross_term=false
+    - stores=48,n_modes=8,a_seed=9,disable_cross_term=true
+    - stores=1,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=1,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=3,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=3,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=5,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=5,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=7,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=7,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=8,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=8,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=10,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=10,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=13,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=13,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=16,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=16,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=20,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=20,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=24,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=24,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=32,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=32,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=40,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=40,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=48,n_modes=2,a_seed=10,disable_cross_term=false
+    - stores=48,n_modes=2,a_seed=10,disable_cross_term=true
+    - stores=1,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=1,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=3,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=3,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=5,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=5,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=7,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=7,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=8,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=8,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=10,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=10,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=13,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=13,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=16,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=16,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=20,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=20,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=24,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=24,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=32,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=32,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=40,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=40,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=48,n_modes=4,a_seed=10,disable_cross_term=false
+    - stores=48,n_modes=4,a_seed=10,disable_cross_term=true
+    - stores=1,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=1,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=3,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=3,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=5,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=5,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=7,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=7,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=8,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=8,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=10,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=10,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=13,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=13,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=16,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=16,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=20,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=20,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=24,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=24,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=32,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=32,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=40,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=40,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=48,n_modes=6,a_seed=10,disable_cross_term=false
+    - stores=48,n_modes=6,a_seed=10,disable_cross_term=true
+    - stores=1,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=1,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=3,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=3,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=5,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=5,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=7,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=7,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=8,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=8,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=10,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=10,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=13,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=13,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=16,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=16,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=20,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=20,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=24,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=24,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=32,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=32,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=40,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=40,n_modes=8,a_seed=10,disable_cross_term=true
+    - stores=48,n_modes=8,a_seed=10,disable_cross_term=false
+    - stores=48,n_modes=8,a_seed=10,disable_cross_term=true
+name: ljf3u0mh_missing
