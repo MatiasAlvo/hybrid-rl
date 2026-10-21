@@ -1,7 +1,7 @@
 # HyAR settings for the joint replenishment comparison: hyar_run.py --config configs/hyar/jrp.yml --p P --seed S
 # Keys are hyar_run.py arguments (command-line flags override them). Relative to the upstream recipe
 # (the runner's defaults), these fix VAE posterior collapse at large p (KL weight, persistent
-# optimizer, longer pretraining), stop TD3 critic divergence (critic LayerNorm), and match HPO's
+# optimizer, longer pretraining), stop TD3 critic divergence (critic LayerNorm), explore more, and match HPO's
 # protocol: 10.24M transitions, checkpoint chosen on the dev set and scored on the test set.
 setting: jrp
 utd: 0.1
@@ -19,6 +19,8 @@ vae_persistent_optimizer: true
 vae_refresh_ep_interval: 1
 vae_refresh_steps: 102
 reward_norm: ema
+expl_noise: 0.5         # final std of the latent exploration noise; chosen on the dev set over
+                        # {0.1 (upstream), 0.3, 0.5, 0.7, 1.0} with one value for all settings
 critic_layer_norm: true
 fast_relabel: true
 buffer_device: cuda
